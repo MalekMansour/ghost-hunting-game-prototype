@@ -1,5 +1,4 @@
 using UnityEngine;
-using UnityEngine.UI;
 
 public class Interaction : MonoBehaviour
 {
@@ -8,14 +7,16 @@ public class Interaction : MonoBehaviour
     public LayerMask itemLayer;
 
     [Header("Hold Point")]
-    public Transform worldHoldPoint;   // character hand (runtime)
+    public Transform worldHoldPoint;
 
     [Header("Crosshairs")]
-    public GameObject crosshairDefault;    // assign the default crosshair UI
-    public GameObject crosshairInteract;   // assign the interact crosshair UI
+    public GameObject crosshairDefault;
+    public GameObject crosshairInteract;
 
     private Camera cam;
     private GameObject worldItem;
+
+    private int originalLayer; // store item layer
 
     void Start()
     {
@@ -39,21 +40,22 @@ public class Interaction : MonoBehaviour
     public void SetHoldPoint(Transform holdPoint)
     {
         worldHoldPoint = holdPoint;
-        Debug.Log("World HoldPoint set: " + holdPoint.name);
     }
 
     void HandleCrosshair()
     {
-        if (cam == null) return;
+        if (cam == null || worldItem != null)
+        {
+            crosshairDefault.SetActive(true);
+            crosshairInteract.SetActive(false);
+            return;
+        }
 
         Ray ray = new Ray(cam.transform.position, cam.transform.forward);
-        bool hitItem = Physics.Raycast(ray, out RaycastHit hit, interactDistance, itemLayer);
+        bool hitItem = Physics.Raycast(ray, interactDistance, itemLayer);
 
-        if (crosshairDefault != null && crosshairInteract != null)
-        {
-            crosshairDefault.SetActive(!hitItem);
-            crosshairInteract.SetActive(hitItem);
-        }
+        crosshairDefault.SetActive(!hitItem);
+        crosshairInteract.SetActive(hitItem);
     }
 
     void TryPickup()
@@ -67,15 +69,16 @@ public class Interaction : MonoBehaviour
         {
             PickUp(hit.collider.gameObject);
         }
-        else
-        {
-            Debug.Log("No item hit");
-        }
     }
 
     void PickUp(GameObject item)
     {
         worldItem = item;
+
+        // store & change layer so it can't be raycast
+        originalLayer = worldItem.layer;
+        worldItem.layer = LayerMask.NameToLayer("Ignore Raycast");
+
         Rigidbody rb = worldItem.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -83,7 +86,6 @@ public class Interaction : MonoBehaviour
             rb.useGravity = false;
         }
 
-        // Move item to placeholder position (placeholder stays invisible)
         if (worldHoldPoint.childCount > 0)
         {
             Transform placeholder = worldHoldPoint.GetChild(0);
@@ -92,8 +94,6 @@ public class Interaction : MonoBehaviour
         }
 
         worldItem.transform.SetParent(worldHoldPoint);
-
-        Debug.Log("Picked up item: " + worldItem.name);
     }
 
     void Drop()
@@ -103,6 +103,9 @@ public class Interaction : MonoBehaviour
 
         worldItem.transform.SetParent(null);
 
+        // restore layer
+        worldItem.layer = originalLayer;
+
         Rigidbody rb = worldItem.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -111,7 +114,5 @@ public class Interaction : MonoBehaviour
         }
 
         worldItem = null;
-        Debug.Log("Dropped item");
     }
 }
-
