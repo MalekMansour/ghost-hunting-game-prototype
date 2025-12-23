@@ -16,7 +16,7 @@ public class Interaction : MonoBehaviour
     private Camera cam;
     private GameObject worldItem;
 
-    private int originalLayer; // store item layer
+    private int originalLayer;
 
     void Start()
     {
@@ -103,7 +103,6 @@ public class Interaction : MonoBehaviour
 
         worldItem.transform.SetParent(null);
 
-        // restore layer
         worldItem.layer = originalLayer;
 
         Rigidbody rb = worldItem.GetComponent<Rigidbody>();
