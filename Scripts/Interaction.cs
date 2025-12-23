@@ -17,7 +17,7 @@ public class Interaction : MonoBehaviour
     private GameObject worldItem;
 
     private int originalLayer;
-    private Collider itemCollider;   
+    private Collider itemCollider;
 
     void Start()
     {
@@ -55,8 +55,8 @@ public class Interaction : MonoBehaviour
         Ray ray = new Ray(cam.transform.position, cam.transform.forward);
         bool hitItem = Physics.Raycast(ray, interactDistance, itemLayer);
 
-        crosshairDefault.SetActive(!hitItem);
-        crosshairInteract.SetActive(hitItem);
+        if (crosshairDefault != null) crosshairDefault.SetActive(!hitItem);
+        if (crosshairInteract != null) crosshairInteract.SetActive(hitItem);
     }
 
     void TryPickup()
@@ -76,11 +76,10 @@ public class Interaction : MonoBehaviour
     {
         worldItem = item;
 
-        // 🔹 STORE & CHANGE LAYER
+        // Prevent re-pickup
         originalLayer = worldItem.layer;
         worldItem.layer = LayerMask.NameToLayer("Ignore Raycast");
 
-        // 🔹 DISABLE COLLIDER (THIS FIXES SLIDING)
         itemCollider = worldItem.GetComponent<Collider>();
         if (itemCollider != null)
             itemCollider.enabled = false;
@@ -95,11 +94,13 @@ public class Interaction : MonoBehaviour
         if (worldHoldPoint.childCount > 0)
         {
             Transform placeholder = worldHoldPoint.GetChild(0);
-            worldItem.transform.position = placeholder.position;
-            worldItem.transform.rotation = placeholder.rotation;
+            worldItem.transform.SetPositionAndRotation(
+                placeholder.position,
+                placeholder.rotation
+            );
         }
 
-        worldItem.transform.SetParent(worldHoldPoint);
+        worldItem.transform.SetParent(worldHoldPoint, true);
     }
 
     void Drop()
@@ -108,7 +109,6 @@ public class Interaction : MonoBehaviour
             return;
 
         worldItem.transform.SetParent(null);
-
         worldItem.layer = originalLayer;
 
         if (itemCollider != null)
@@ -119,7 +119,14 @@ public class Interaction : MonoBehaviour
         {
             rb.isKinematic = false;
             rb.useGravity = true;
+
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
         }
+
+        Dropped dropped = worldItem.GetComponent<Dropped>();
+        if (dropped != null)
+            dropped.OnDropped();
 
         worldItem = null;
         itemCollider = null;
