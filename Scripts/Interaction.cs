@@ -17,7 +17,7 @@ public class Interaction : MonoBehaviour
     private GameObject worldItem;
 
     private int originalLayer;
-    private Collider itemCollider;   // 🔹 IMPORTANT FIX
+    private Collider itemCollider;   
 
     void Start()
     {
@@ -92,7 +92,6 @@ public class Interaction : MonoBehaviour
             rb.useGravity = false;
         }
 
-        // Snap to placeholder (exact hand position)
         if (worldHoldPoint.childCount > 0)
         {
             Transform placeholder = worldHoldPoint.GetChild(0);
@@ -110,10 +109,8 @@ public class Interaction : MonoBehaviour
 
         worldItem.transform.SetParent(null);
 
-        // 🔹 RESTORE LAYER
         worldItem.layer = originalLayer;
 
-        // 🔹 RE-ENABLE COLLIDER
         if (itemCollider != null)
             itemCollider.enabled = true;
 
