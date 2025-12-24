@@ -1,25 +1,55 @@
 using UnityEngine;
-using System.Collections.Generic;
 
 public class Flashlight : MonoBehaviour
 {
+    [Header("Input")]
     public KeyCode toggleKey = KeyCode.F;
-    public float holdTime = 2f;
+    public float holdTime = 0.5f;
 
-    private float holdTimer = 0f;
+    [Header("Sound")]
+    public AudioClip flashlightOnSound;
+    public AudioClip flashlightOffSound;
+    [Range(0f, 1f)] public float volume = 0.8f;
+
+    private float holdTimer;
     private bool flashlightOn = false;
 
-    private Transform flashlightRoot;
-    private List<GameObject> flashlightChildren = new List<GameObject>();
+    private Light cameraLight;
+    private AudioSource audioSource;
 
     void Start()
     {
-        FindFlashlightObject();
-        SetFlashlight(false); // force OFF at start
+        Camera cam = Camera.main;
+
+        if (cam == null)
+        {
+            Debug.LogError("Main Camera not found!");
+            return;
+        }
+
+        cameraLight = cam.GetComponent<Light>();
+        if (cameraLight == null)
+        {
+            Debug.LogError("No Light component found on Main Camera!");
+            return;
+        }
+
+        audioSource = cam.GetComponent<AudioSource>();
+        if (audioSource == null)
+            audioSource = cam.gameObject.AddComponent<AudioSource>();
+
+        audioSource.playOnAwake = false;
+        audioSource.spatialBlend = 0f;
+
+        cameraLight.enabled = false;
+        flashlightOn = false;
     }
 
     void Update()
     {
+        if (cameraLight == null)
+            return;
+
         if (Input.GetKey(toggleKey))
         {
             holdTimer += Time.deltaTime;
@@ -36,50 +66,18 @@ public class Flashlight : MonoBehaviour
         }
     }
 
-    void FindFlashlightObject()
-    {
-        flashlightRoot = FindChildRecursive(transform.root, "Flashlight");
-
-        if (flashlightRoot == null)
-        {
-            Debug.LogError("❌ Flashlight object NOT found anywhere under PLAYER ROOT!");
-            return;
-        }
-
-        flashlightChildren.Clear();
-
-        foreach (Transform child in flashlightRoot.GetComponentsInChildren<Transform>(true))
-        {
-            if (child != flashlightRoot)
-                flashlightChildren.Add(child.gameObject);
-        }
-
-        Debug.Log($"✅ Flashlight found with {flashlightChildren.Count} child object(s).");
-    }
-
     void ToggleFlashlight()
     {
         flashlightOn = !flashlightOn;
-        SetFlashlight(flashlightOn);
-    }
+        cameraLight.enabled = flashlightOn;
 
-    void SetFlashlight(bool state)
-    {
-        foreach (GameObject obj in flashlightChildren)
-            obj.SetActive(state);
-    }
-
-    Transform FindChildRecursive(Transform parent, string name)
-    {
-        foreach (Transform child in parent)
+        if (flashlightOn && flashlightOnSound != null)
         {
-            if (child.name == name)
-                return child;
-
-            Transform found = FindChildRecursive(child, name);
-            if (found != null)
-                return found;
+            audioSource.PlayOneShot(flashlightOnSound, volume);
         }
-        return null;
+        else if (!flashlightOn && flashlightOffSound != null)
+        {
+            audioSource.PlayOneShot(flashlightOffSound, volume);
+        }
     }
 }
