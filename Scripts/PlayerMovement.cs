@@ -31,9 +31,14 @@ public class PlayerMovement : MonoBehaviour
     [HideInInspector]
     public Vector2 moveInput;
 
+    private Rigidbody rb;
+
     void Start()
     {
         currentStamina = maxStamina;
+
+        rb = GetComponent<Rigidbody>();
+        rb.freezeRotation = true;
 
         if (playerCamera == null)
         {
@@ -91,12 +96,6 @@ public class PlayerMovement : MonoBehaviour
 
         currentStamina = Mathf.Clamp(currentStamina, 0, maxStamina);
 
-        Vector3 moveDir =
-            transform.right * horizontal +
-            transform.forward * vertical;
-
-        transform.position += moveDir.normalized * currentSpeed * Time.deltaTime;
-
         if (playerCamera != null)
         {
             float targetHeight = isCrouching ? crouchCamHeight : standingCamHeight;
@@ -104,6 +103,21 @@ public class PlayerMovement : MonoBehaviour
             camPos.y = Mathf.Lerp(camPos.y, targetHeight, Time.deltaTime * camSmoothSpeed);
             playerCamera.localPosition = camPos;
         }
+    }
+
+    void FixedUpdate()
+    {
+        if (isMovementLocked)
+            return;
+
+        Vector3 moveDir =
+            transform.right * moveInput.x +
+            transform.forward * moveInput.y;
+
+        Vector3 targetPos =
+            rb.position + moveDir.normalized * currentSpeed * Time.fixedDeltaTime;
+
+        rb.MovePosition(targetPos);
     }
 
     IEnumerator SprintCooldown()
