@@ -12,6 +12,7 @@ public class Interaction : MonoBehaviour
     [Header("Crosshairs")]
     public GameObject crosshairDefault;
     public GameObject crosshairInteract;
+    public GameObject grabCrosshair;
 
     private Camera cam;
     private GameObject worldItem;
@@ -19,12 +20,20 @@ public class Interaction : MonoBehaviour
     private int originalLayer;
     private Collider itemCollider;
 
+    private PlayerInventory inventory;
+
+    private PlayerRaycaster raycaster;
+
     void Start()
     {
+        
         cam = Camera.main;
+        inventory = GetComponent<PlayerInventory>();
+        raycaster = GetComponent<PlayerRaycaster>();
 
         if (crosshairDefault != null) crosshairDefault.SetActive(true);
         if (crosshairInteract != null) crosshairInteract.SetActive(false);
+        if (grabCrosshair != null) grabCrosshair.SetActive(false);
     }
 
     void Update()
@@ -44,33 +53,73 @@ public class Interaction : MonoBehaviour
     }
 
     void HandleCrosshair()
+{
+    if (cam == null || inventory == null)
+        return;
+
+    // Check if holding an item in hand (equipped)
+    bool holdingItem = inventory.GetCurrentItem() != null;
+
+    if (holdingItem)
     {
-        if (cam == null || worldItem != null)
+        InventoryItem currentItem = inventory.GetCurrentItem();
+        IUseOnTarget usable = currentItem.GetComponent<IUseOnTarget>();
+
+        if (usable != null && usable.CanUse(cam))
         {
-            crosshairDefault.SetActive(true);
-            crosshairInteract.SetActive(false);
+            // Show interact crosshair if the held item can be used on something
+            crosshairDefault?.SetActive(false);
+            crosshairInteract?.SetActive(true);
+            grabCrosshair?.SetActive(false);
             return;
         }
 
-        Ray ray = new Ray(cam.transform.position, cam.transform.forward);
-        bool hitItem = Physics.Raycast(ray, interactDistance, itemLayer);
-
-        if (crosshairDefault != null) crosshairDefault.SetActive(!hitItem);
-        if (crosshairInteract != null) crosshairInteract.SetActive(hitItem);
+        // Holding an item but cannot use it
+        crosshairDefault?.SetActive(true);
+        crosshairInteract?.SetActive(false);
+        grabCrosshair?.SetActive(false);
+        return;
     }
+
+    // Not holding anything, normal grab check
+    Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+    bool hitItem = Physics.Raycast(ray, interactDistance, itemLayer);
+
+    crosshairDefault?.SetActive(!hitItem);
+    crosshairInteract?.SetActive(false);
+    grabCrosshair?.SetActive(hitItem);
+}
 
     void TryPickup()
-    {
-        if (worldItem != null || worldHoldPoint == null)
-            return;
+{
+    if (worldHoldPoint == null || inventory == null)
+        return;
 
-        Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+    // Only pick up if hands are empty
+    if (!inventory.IsHandsEmpty())
+        return;
 
-        if (Physics.Raycast(ray, out RaycastHit hit, interactDistance, itemLayer))
-        {
-            PickUp(hit.collider.gameObject);
-        }
-    }
+    Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+
+    if (!Physics.Raycast(ray, out RaycastHit hit, interactDistance, itemLayer))
+        return;
+
+    InventoryItem item = hit.collider.GetComponent<InventoryItem>();
+    if (item == null)
+        return;
+
+    // Reset dropped state so impact sound + physics work again later
+    Dropped dropped = item.GetComponent<Dropped>();
+    if (dropped != null)
+        dropped.ResetDropped();
+
+    // Try to add to inventory
+    if (!inventory.TryAddItem(item))
+        return;
+
+    // Track held world item (for crosshair / interaction logic)
+    worldItem = item.gameObject;
+}
 
     void PickUp(GameObject item)
     {
@@ -104,31 +153,38 @@ public class Interaction : MonoBehaviour
     }
 
     void Drop()
+{
+    if (inventory == null)
+        return;
+
+    // Drop the currently equipped item in inventory
+    InventoryItem currentItem = inventory.GetCurrentItem();
+    if (currentItem == null)
+        return;
+
+    // Restore physics
+    Rigidbody rb = currentItem.GetComponent<Rigidbody>();
+    if (rb != null)
     {
-        if (worldItem == null)
-            return;
-
-        worldItem.transform.SetParent(null);
-        worldItem.layer = originalLayer;
-
-        if (itemCollider != null)
-            itemCollider.enabled = true;
-
-        Rigidbody rb = worldItem.GetComponent<Rigidbody>();
-        if (rb != null)
-        {
-            rb.isKinematic = false;
-            rb.useGravity = true;
-
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-        }
-
-        Dropped dropped = worldItem.GetComponent<Dropped>();
-        if (dropped != null)
-            dropped.OnDropped();
-
-        worldItem = null;
-        itemCollider = null;
+        rb.isKinematic = false;
+        rb.useGravity = true;
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
     }
+
+    Collider col = currentItem.GetComponent<Collider>();
+    if (col != null)
+        col.enabled = true;
+
+    // Detach from hand
+    currentItem.transform.SetParent(null);
+    currentItem.gameObject.SetActive(true);
+
+    // Remove from inventory
+    inventory.DropCurrent();
+
+    // Reset worldItem reference
+    worldItem = null;
+    itemCollider = null;
+}
 }
