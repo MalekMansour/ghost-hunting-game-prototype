@@ -36,16 +36,13 @@ public class PlayerInventory : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.Alpha4)) SelectSlot(3);
     }
 
-    // ---------------- ADD ITEM ----------------
     public bool TryAddItem(InventoryItem item)
     {
-        // Only add if current slot empty
         if (slots[currentSlot] != null)
             return false;
 
         slots[currentSlot] = item;
 
-        // Disable physics & collider
         Rigidbody rb = item.GetComponent<Rigidbody>();
         if (rb)
         {
@@ -56,22 +53,18 @@ public class PlayerInventory : MonoBehaviour
         Collider col = item.GetComponent<Collider>();
         if (col) col.enabled = false;
 
-        // Parent to inventory root and deactivate
         item.transform.SetParent(transform);
         item.gameObject.SetActive(false);
 
-        // Equip immediately
         EquipCurrent();
 
         return true;
     }
 
-    // ---------------- SLOT SWITCH ----------------
     void SelectSlot(int slot)
     {
         if (slot == currentSlot)
         {
-            // Toggle current slot OFF if selected again
             UnequipCurrent();
             inventoryUI.ShowEmptyHand();
             return;
@@ -82,7 +75,6 @@ public class PlayerInventory : MonoBehaviour
         EquipCurrent();
     }
 
-    // ---------------- EQUIP / UNEQUIP ----------------
     void EquipCurrent()
     {
         InventoryItem item = slots[currentSlot];
@@ -108,14 +100,12 @@ public class PlayerInventory : MonoBehaviour
         item.gameObject.SetActive(false);
     }
 
-    // ---------------- DROP ITEM ----------------
     public void DropCurrent()
     {
         InventoryItem item = slots[currentSlot];
         if (item == null)
             return;
 
-        // Restore physics
         Rigidbody rb = item.GetComponent<Rigidbody>();
         if (rb)
         {
@@ -126,26 +116,21 @@ public class PlayerInventory : MonoBehaviour
         Collider col = item.GetComponent<Collider>();
         if (col) col.enabled = true;
 
-        // Detach from inventory
         item.transform.SetParent(null);
         item.gameObject.SetActive(true);
 
-        // Play drop sound if the item has a Dropped component
         Dropped dropped = item.GetComponent<Dropped>();
         if (dropped != null)
         {
-            dropped.OnDropped();      // plays sound
-            dropped.ResetDropped();   // ensures it can play again on future drops
+            dropped.OnDropped();      
+            dropped.ResetDropped();   
         }
 
-        // Remove from inventory
         slots[currentSlot] = null;
 
-        // Reset hand UI
         inventoryUI.ShowEmptyHand();
     }
 
-    // ---------------- HELPERS ----------------
     public InventoryItem GetCurrentItem()
     {
         return slots[currentSlot];
@@ -156,4 +141,3 @@ public class PlayerInventory : MonoBehaviour
         return slots[currentSlot] == null;
     }
 }
-
