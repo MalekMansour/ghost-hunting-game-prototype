@@ -62,7 +62,7 @@ public class Footsteps : MonoBehaviour
         if (playerMovement.IsCrouching())
             return crouchInterval;
 
-        if (Input.GetKey(KeyCode.LeftShift))
+        if (playerMovement.IsSprinting())
             return sprintInterval;
 
         return walkInterval;
@@ -73,10 +73,9 @@ public class Footsteps : MonoBehaviour
         if (playerMovement.IsCrouching())
             return crouchVolume;
 
-        if (Input.GetKey(KeyCode.LeftShift))
+        if (playerMovement.IsSprinting())
             return sprintVolume;
 
         return walkVolume;
     }
 }
-
