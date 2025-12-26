@@ -1,3 +1,2 @@
-# ghost-hunting-game-prototype
-a horror game by mingo
-about ghost hunting.
+# Spectrify
+A ghost hunting game.
