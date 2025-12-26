@@ -34,7 +34,6 @@ public class Sanity : MonoBehaviour
         }
     }
 
-    // ---------------- SANITY LOGIC ----------------
     public void DrainSanity(float amount)
     {
         sanity -= amount;
@@ -49,7 +48,6 @@ public class Sanity : MonoBehaviour
         UpdateSanityUI();
     }
 
-    // ---------------- UI ----------------
     void UpdateSanityUI()
     {
         if (sanityText != null)
