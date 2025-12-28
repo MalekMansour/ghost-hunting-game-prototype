@@ -1,104 +1,122 @@
 using UnityEngine;
 using UnityEngine.AI;
+using System.Collections;
 
 public class Echoe : MonoBehaviour
 {
-    [Header("Noise Attraction")]
-    public float hearingRange = 10f;          // how far Echoe can "hear" noise units
-    public float minNoiseToCare = 0.1f;       // ignore tiny noise values
-    public float louderSwitchMargin = 0.05f;  // must be louder than current by this much to switch
-    public float scanInterval = 0.25f;        // how often we scan for noise
+    [Header("References")]
+    [Tooltip("The visual object to toggle (your 'Ghost Model' child). If empty, the script tries to find it by name.")]
+    public GameObject ghostModelRoot;
+
+    [Header("Visibility (MODEL ONLY)")]
+    [Range(0f, 1f)] public float visibleChance = 0.2f;     // 20%
+    public float visibilityCheckInterval = 3f;
+
+    [Header("Hearing")]
+    public float hearingRange = 10f;
+    public float noiseScanInterval = 0.25f;
+    [Tooltip("Minimum noise needed for Echoe to care.")]
+    public float minNoiseToReact = 0.1f;
 
     [Header("Roaming")]
-    public float roamRadius = 25f;            // how far random roam points can be from current position
-    public float roamInterval = 3f;           // how often to pick a new roam destination when roaming
-    public float arriveDistance = 1.2f;       // how close counts as "arrived" at target
+    [Tooltip("How far Echoe roams when no noise is interesting.")]
+    public float roamRadius = 18f;
+    public float roamPointInterval = 4f;
 
-    [Header("Debug")]
-    public bool drawDebug = false;
+    [Header("Roam Around Noise")]
+    [Tooltip("Once Echoe reaches a noise source, it will keep wandering within this radius around it.")]
+    public float noiseWanderRadius = 4f;
+    public float noiseWanderRepathTime = 1.2f;
+
+    [Header("NavMesh")]
+    public float arriveDistance = 1.1f;
+    public int sampleTries = 12;
+    public float navSampleRadius = 2f;
 
     private NavMeshAgent agent;
 
-    // Current noise target
-    private Units currentNoiseUnit;
+    private Units currentNoiseTarget;
     private float currentNoiseValue;
 
-    private float scanTimer;
-    private float roamTimer;
+    private float nextRoamTime;
+    private float nextNoiseWanderTime;
 
     void Start()
     {
         agent = GetComponent<NavMeshAgent>();
         if (agent == null)
         {
-            Debug.LogError("❌ Echoe: Missing NavMeshAgent on the Echoe prefab.");
+            Debug.LogError("❌ Echoe: Missing NavMeshAgent on the Echoe brain prefab.");
             enabled = false;
             return;
         }
 
+        // Auto-find model root if not assigned
+        if (ghostModelRoot == null)
+        {
+            Transform t = transform.Find("Ghost Model");
+            if (t != null) ghostModelRoot = t.gameObject;
+        }
+
+        // Start invis/vis routine
+        StartCoroutine(VisibilityRoutine());
+
         // Start roaming immediately
-        roamTimer = 0f;
-        scanTimer = 0f;
+        nextRoamTime = Time.time + 0.2f;
+        StartCoroutine(NoiseScanRoutine());
     }
 
     void Update()
     {
-        // 1) Scan for noises on an interval (NOT every frame)
-        scanTimer -= Time.deltaTime;
-        if (scanTimer <= 0f)
+        // If we have a noise target, orbit/wander around it.
+        if (currentNoiseTarget != null && currentNoiseTarget.noise >= minNoiseToReact)
         {
-            scanTimer = scanInterval;
-            ScanForNoise();
-        }
-
-        // 2) If we have a noise target, go to it and hover around it
-        if (currentNoiseUnit != null)
-        {
-            // If the unit got destroyed/disabled etc.
-            if (!currentNoiseUnit.gameObject.activeInHierarchy)
-            {
-                ClearNoiseTarget();
-                return;
-            }
-
-            Vector3 targetPos = currentNoiseUnit.transform.position;
-            if (agent.isOnNavMesh)
-                agent.SetDestination(targetPos);
-
-            // If we arrived, do NOT stop forever.
-            // Just keep the destination (it’ll stay near it) and keep scanning for louder noise.
-            // If the noise becomes 0, drop it and resume roaming.
-            if (currentNoiseUnit.noise <= minNoiseToCare)
-            {
-                ClearNoiseTarget();
-            }
-
-            if (drawDebug)
-            {
-                Debug.DrawLine(transform.position + Vector3.up, targetPos + Vector3.up, Color.yellow);
-            }
-
+            HandleNoiseWander();
             return;
         }
 
-        // 3) Otherwise roam
-        roamTimer -= Time.deltaTime;
-        if (roamTimer <= 0f)
+        // Otherwise roam around the map
+        HandleFreeRoam();
+    }
+
+    // -------------------- VISIBILITY --------------------
+
+    IEnumerator VisibilityRoutine()
+    {
+        while (true)
         {
-            roamTimer = roamInterval;
-            SetRandomRoamDestination();
+            bool shouldBeVisible = Random.value < visibleChance;
+
+            if (ghostModelRoot != null)
+                ghostModelRoot.SetActive(shouldBeVisible);
+
+            yield return new WaitForSeconds(visibilityCheckInterval);
         }
     }
 
-    void ScanForNoise()
+    // -------------------- NOISE LOGIC --------------------
+
+    IEnumerator NoiseScanRoutine()
     {
-        // Find all Units in the scene (cheap enough at scanInterval; optimize later if needed)
-        Units[] allUnits = FindObjectsByType<Units>(FindObjectsSortMode.None);
+        WaitForSeconds wait = new WaitForSeconds(noiseScanInterval);
+
+        while (true)
+        {
+            ScanForLoudestNoise();
+            yield return wait;
+        }
+    }
+
+    void ScanForLoudestNoise()
+    {
+        // Find all Units in the scene (simple & reliable).
+        // If later you have MANY, we can optimize with a registry.
+        Units[] allUnits = FindObjectsOfType<Units>(false);
 
         Units best = null;
-        float bestNoise = 0f;
+        float bestNoise = minNoiseToReact;
 
-        Vector3 myPos = transform.position;
+        Vector3 pos = transform.position;
 
         for (int i = 0; i < allUnits.Length; i++)
         {
@@ -106,75 +124,93 @@ public class Echoe : MonoBehaviour
             if (u == null) continue;
 
             float n = u.noise;
-            if (n <= minNoiseToCare) continue;
+            if (n < bestNoise) continue;
 
-            float dist = Vector3.Distance(myPos, u.transform.position);
-            if (dist > hearingRange) continue;
+            float d = Vector3.Distance(pos, u.transform.position);
+            if (d > hearingRange) continue;
 
-            // Pick the loudest noise in range
-            if (n > bestNoise)
+            best = u;
+            bestNoise = n;
+        }
+
+        if (best == null)
+        {
+            // If current target died or went quiet, clear it.
+            currentNoiseTarget = null;
+            currentNoiseValue = 0f;
+            return;
+        }
+
+        // Switch ONLY if louder than what we're currently camping
+        if (currentNoiseTarget == null || bestNoise > currentNoiseValue + 0.001f)
+        {
+            currentNoiseTarget = best;
+            currentNoiseValue = bestNoise;
+
+            // First move to the area near the noise (not exactly on it)
+            SetDestinationNear(currentNoiseTarget.transform.position, noiseWanderRadius);
+            nextNoiseWanderTime = Time.time + noiseWanderRepathTime;
+        }
+    }
+
+    void HandleNoiseWander()
+    {
+        if (currentNoiseTarget == null) return;
+
+        // If we arrived OR enough time passed, pick a new point around noise.
+        bool arrived =
+            !agent.pathPending &&
+            agent.remainingDistance <= arriveDistance;
+
+        if (arrived || Time.time >= nextNoiseWanderTime)
+        {
+            SetDestinationNear(currentNoiseTarget.transform.position, noiseWanderRadius);
+            nextNoiseWanderTime = Time.time + noiseWanderRepathTime;
+        }
+    }
+
+    // -------------------- ROAMING --------------------
+
+    void HandleFreeRoam()
+    {
+        if (Time.time < nextRoamTime)
+            return;
+
+        // If we have no path or we arrived, pick a new roam point
+        bool needNew =
+            !agent.hasPath ||
+            (!agent.pathPending && agent.remainingDistance <= arriveDistance);
+
+        if (needNew)
+        {
+            SetDestinationNear(transform.position, roamRadius);
+            nextRoamTime = Time.time + roamPointInterval;
+        }
+    }
+
+    // -------------------- NAV HELPERS --------------------
+
+    void SetDestinationNear(Vector3 center, float radius)
+    {
+        Vector3 chosen = center;
+
+        for (int i = 0; i < sampleTries; i++)
+        {
+            Vector2 rnd = Random.insideUnitCircle * radius;
+            Vector3 candidate = new Vector3(center.x + rnd.x, center.y, center.z + rnd.y);
+
+            if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, navSampleRadius, NavMesh.AllAreas))
             {
-                bestNoise = n;
-                best = u;
+                chosen = hit.position;
+                agent.SetDestination(chosen);
+                return;
             }
         }
 
-        // If we found nothing, maybe clear target if we had one
-        if (best == null)
-            return;
-
-        // If we don't already have a target, take it
-        if (currentNoiseUnit == null)
+        // Fallback: try center itself
+        if (NavMesh.SamplePosition(center, out NavMeshHit hit2, navSampleRadius, NavMesh.AllAreas))
         {
-            SetNoiseTarget(best, bestNoise);
-            return;
-        }
-
-        // If we do have a target, only switch if it's meaningfully louder
-        if (best != currentNoiseUnit && bestNoise > currentNoiseValue + louderSwitchMargin)
-        {
-            SetNoiseTarget(best, bestNoise);
-        }
-    }
-
-    void SetNoiseTarget(Units u, float noiseValue)
-    {
-        currentNoiseUnit = u;
-        currentNoiseValue = noiseValue;
-
-        // When we lock onto noise, stop roaming timer so we don't overwrite destination
-        roamTimer = roamInterval;
-
-        if (drawDebug)
-            Debug.Log($"👻 Echoe locked onto noise: {u.name} (noise={noiseValue})");
-    }
-
-    void ClearNoiseTarget()
-    {
-        currentNoiseUnit = null;
-        currentNoiseValue = 0f;
-
-        // Force a roam destination soon
-        roamTimer = 0f;
-    }
-
-    void SetRandomRoamDestination()
-    {
-        if (!agent.isOnNavMesh)
-            return;
-
-        // Pick a random point around us, then snap to NavMesh
-        Vector3 randomDir = Random.insideUnitSphere * roamRadius;
-        randomDir.y = 0f;
-
-        Vector3 candidate = transform.position + randomDir;
-
-        if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, roamRadius, NavMesh.AllAreas))
-        {
-            agent.SetDestination(hit.position);
-
-            if (drawDebug)
-                Debug.DrawLine(transform.position + Vector3.up, hit.position + Vector3.up, Color.cyan, 1f);
+            agent.SetDestination(hit2.position);
         }
     }
 }
