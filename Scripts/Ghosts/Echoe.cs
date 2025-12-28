@@ -9,7 +9,7 @@ public class Echoe : MonoBehaviour
     public GameObject ghostModelRoot;
 
     [Header("Visibility (MODEL ONLY)")]
-    [Range(0f, 1f)] public float visibleChance = 0.2f;     // 20%
+    [Range(0f, 1f)] public float visibleChance = 0.2f;  
     public float visibilityCheckInterval = 3f;
 
     [Header("Hearing")]
@@ -94,7 +94,6 @@ public class Echoe : MonoBehaviour
         }
     }
 
-    // -------------------- NOISE LOGIC --------------------
 
     IEnumerator NoiseScanRoutine()
     {
@@ -109,8 +108,7 @@ public class Echoe : MonoBehaviour
 
     void ScanForLoudestNoise()
     {
-        // Find all Units in the scene (simple & reliable).
-        // If later you have MANY, we can optimize with a registry.
+
         Units[] allUnits = FindObjectsOfType<Units>(false);
 
         Units best = null;
