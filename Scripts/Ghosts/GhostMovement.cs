@@ -6,185 +6,178 @@ using System.Collections;
 public class GhostMovement : MonoBehaviour
 {
     [Header("References")]
-    [Tooltip("Assign by GhostSpawner: this is the 'GhostModel' container under Ghost root")]
-    public Transform modelRoot;
+    public NavMeshAgent agent;          // should be on this brain object
+    public Transform modelRoot;         // visuals only (GhostModel)
 
     [Header("Movement")]
-    public float baseSpeed = 3.5f;
-    public float roamRadius = 25f;
-    public float roamRepathInterval = 2.0f;
+    public float roamRadius = 18f;
+    public float roamPointReachDist = 1.2f;
+    public float roamRepathTime = 2.0f;     // how often it chooses new roam points
+    public float moveChance = 0.8f;         // ~80% of time it keeps moving
+    public float idleTime = 1.0f;           // if it decides to stop, how long
+    public float ghostSpeed = 2.8f;         // editable speed
 
-    [Tooltip("Ghost moves this % of the time while roaming (ex: 0.8 = 80%)")]
-    [Range(0f, 1f)] public float roamMoveChance = 0.8f;
+    [Header("Noise Investigation")]
+    public float investigateLoiterRadius = 6f;  // roam around noise source
+    public float investigateMinTime = 4f;       // don’t instantly leave
+    private bool investigating;
+    private Vector3 investigateCenter;
+    private float investigateUntilTime;
 
-    [Header("Visibility (Model Only)")]
+    [Header("Apparition")]
     [Range(0f, 1f)] public float visibleChance = 0.2f; // 20%
     public float visibilityCheckInterval = 3f;
-    public float minVisibleSeconds = 1.0f;
-    public float maxVisibleSeconds = 2.5f;
+    public float visibleDuration = 1.5f; // when it appears
 
-    private NavMeshAgent agent;
-    private Renderer[] modelRenderers;
+    private Coroutine roamCo;
+    private Coroutine visCo;
 
-    // Behavior override target
-    private bool hasTargetOverride = false;
-    private Vector3 targetOverridePos;
-    private float targetStopDistance = 1.2f;
+    void Awake()
+    {
+        if (agent == null) agent = GetComponent<NavMeshAgent>();
+    }
 
     void Start()
     {
-        agent = GetComponent<NavMeshAgent>();
+        // Make sure agent is configured
+        agent.speed = ghostSpeed;
+        agent.autoBraking = false;
+
+        // If you want the agent to rotate toward movement:
+        agent.updateRotation = true;
+
+        // Safety: if agent isn't on NavMesh, snap it
+        if (!agent.isOnNavMesh)
+        {
+            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 8f, NavMesh.AllAreas))
+                transform.position = hit.position;
+        }
 
         if (!agent.isOnNavMesh)
         {
-            Debug.LogError("❌ GhostMovement: Agent is NOT on a NavMesh. Make sure GhostSpawner warps it onto the NavMesh.");
+            Debug.LogError("❌ GhostMovement: Agent is NOT on NavMesh. Move spawn closer or increase spawner snapRadius.");
+            enabled = false;
             return;
         }
 
-        agent.speed = baseSpeed;
-
-        CacheModelRenderers();
-
-        StartCoroutine(RoamRoutine());
-        StartCoroutine(ApparitionRoutine());
+        roamCo = StartCoroutine(RoamLoop());
+        visCo = StartCoroutine(VisibilityLoop());
     }
 
-    void CacheModelRenderers()
+    public void SetModelRoot(Transform root)
     {
-        if (modelRoot == null)
-        {
-            // We can still roam without visuals, but tell you.
-            Debug.LogWarning("⚠️ GhostMovement: modelRoot not assigned yet (GhostModel). Visibility won't work until assigned.");
-            modelRenderers = new Renderer[0];
-            return;
-        }
-
-        modelRenderers = modelRoot.GetComponentsInChildren<Renderer>(true);
+        modelRoot = root;
     }
 
-    public void SetModelRoot(Transform newModelRoot)
+    public void SetSpeed(float speed)
     {
-        modelRoot = newModelRoot;
-        CacheModelRenderers();
+        ghostSpeed = speed;
+        if (agent != null) agent.speed = ghostSpeed;
     }
 
-    public void SetSpeed(float newSpeed)
+    // Echoe calls this when it finds a louder noise
+    public void InvestigateNoise(Vector3 worldPos)
     {
-        baseSpeed = Mathf.Max(0.1f, newSpeed);
-        if (agent != null) agent.speed = baseSpeed;
+        investigating = true;
+        investigateCenter = worldPos;
+        investigateUntilTime = Time.time + investigateMinTime;
+
+        // Immediately head toward the noise area
+        SetDestinationSafe(GetRandomPointNear(investigateCenter, investigateLoiterRadius));
     }
 
-    public void SetTargetOverride(Vector3 worldPos, float stopDistance = 1.2f)
-    {
-        hasTargetOverride = true;
-        targetOverridePos = worldPos;
-        targetStopDistance = Mathf.Max(0.2f, stopDistance);
-
-        if (agent != null && agent.isOnNavMesh)
-            agent.SetDestination(targetOverridePos);
-    }
-
-    public void ClearTargetOverride()
-    {
-        hasTargetOverride = false;
-    }
-
-    IEnumerator RoamRoutine()
+    IEnumerator RoamLoop()
     {
         while (true)
         {
-            if (agent == null || !agent.isOnNavMesh)
+            agent.speed = ghostSpeed;
+
+            // If we’re investigating, keep moving around the investigateCenter
+            if (investigating)
             {
-                yield return new WaitForSeconds(0.5f);
-                continue;
-            }
-
-            agent.speed = baseSpeed;
-
-            // If a behavior script is controlling destination, keep going there
-            if (hasTargetOverride)
-            {
-                agent.stoppingDistance = targetStopDistance;
-
-                // If we reached the target, we don't freeze forever — we just chill briefly then resume roam if override clears
-                if (!agent.pathPending && agent.remainingDistance <= agent.stoppingDistance + 0.2f)
+                // If time expired, stop investigating and go back to full roam
+                if (Time.time >= investigateUntilTime)
                 {
-                    // small pause so it "hangs around"
-                    yield return new WaitForSeconds(0.35f);
+                    investigating = false;
                 }
+                else
+                {
+                    // If reached current spot near noise, pick another nearby spot
+                    if (!agent.pathPending && agent.remainingDistance <= roamPointReachDist)
+                    {
+                        SetDestinationSafe(GetRandomPointNear(investigateCenter, investigateLoiterRadius));
+                    }
 
-                yield return new WaitForSeconds(0.2f);
-                continue;
+                    yield return new WaitForSeconds(roamRepathTime);
+                    continue;
+                }
             }
 
-            // Normal roam
-            agent.stoppingDistance = 0f;
-
-            // 80% move, 20% chill (tweakable)
-            bool shouldMove = Random.value < roamMoveChance;
-            if (!shouldMove)
+            // Normal roaming (across the whole map)
+            float roll = Random.value;
+            if (roll > moveChance)
             {
-                yield return new WaitForSeconds(roamRepathInterval);
-                continue;
-            }
-
-            Vector3 roamPoint = GetRandomNavmeshPoint(transform.position, roamRadius);
-            agent.SetDestination(roamPoint);
-
-            // Wait a bit then repath (keeps it exploring / not dumb)
-            float t = 0f;
-            while (t < roamRepathInterval)
-            {
-                // If we arrived early, pick a new place soon
-                if (!agent.pathPending && agent.remainingDistance <= 1.0f)
-                    break;
-
-                t += Time.deltaTime;
-                yield return null;
-            }
-        }
-    }
-
-    Vector3 GetRandomNavmeshPoint(Vector3 origin, float radius)
-    {
-        for (int i = 0; i < 20; i++)
-        {
-            Vector3 random = origin + Random.insideUnitSphere * radius;
-            if (NavMesh.SamplePosition(random, out NavMeshHit hit, 3f, NavMesh.AllAreas))
-                return hit.position;
-        }
-        return origin;
-    }
-
-    IEnumerator ApparitionRoutine()
-    {
-        while (true)
-        {
-            bool shouldBeVisible = Random.value < visibleChance;
-            if (shouldBeVisible)
-            {
-                SetModelVisible(true);
-                float visibleTime = Random.Range(minVisibleSeconds, maxVisibleSeconds);
-                yield return new WaitForSeconds(visibleTime);
-                SetModelVisible(false);
+                // idle a bit
+                agent.ResetPath();
+                yield return new WaitForSeconds(idleTime);
             }
             else
             {
-                SetModelVisible(false);
-            }
+                Vector3 dest = GetRandomPointNear(transform.position, roamRadius);
+                SetDestinationSafe(dest);
 
-            yield return new WaitForSeconds(visibilityCheckInterval);
+                // Let it walk a bit before picking another point
+                yield return new WaitForSeconds(roamRepathTime);
+            }
         }
     }
 
-    public void SetModelVisible(bool visible)
+    IEnumerator VisibilityLoop()
     {
-        if (modelRenderers == null) return;
-
-        for (int i = 0; i < modelRenderers.Length; i++)
+        while (true)
         {
-            if (modelRenderers[i] != null)
-                modelRenderers[i].enabled = visible;
+            yield return new WaitForSeconds(visibilityCheckInterval);
+
+            if (modelRoot == null) continue;
+
+            // 20% chance to appear
+            if (Random.value < visibleChance)
+            {
+                SetBodyVisible(true);
+                yield return new WaitForSeconds(visibleDuration);
+                SetBodyVisible(false);
+            }
+            else
+            {
+                SetBodyVisible(false);
+            }
         }
+    }
+
+    public void SetBodyVisible(bool state)
+    {
+        if (modelRoot != null)
+            modelRoot.gameObject.SetActive(state);
+    }
+
+    void SetDestinationSafe(Vector3 dest)
+    {
+        if (agent == null || !agent.isOnNavMesh) return;
+
+        if (NavMesh.SamplePosition(dest, out NavMeshHit hit, 6f, NavMesh.AllAreas))
+            agent.SetDestination(hit.position);
+    }
+
+    Vector3 GetRandomPointNear(Vector3 center, float radius)
+    {
+        for (int i = 0; i < 20; i++)
+        {
+            Vector2 r = Random.insideUnitCircle * radius;
+            Vector3 candidate = new Vector3(center.x + r.x, center.y, center.z + r.y);
+
+            if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, 4f, NavMesh.AllAreas))
+                return hit.position;
+        }
+        return center;
     }
 }
