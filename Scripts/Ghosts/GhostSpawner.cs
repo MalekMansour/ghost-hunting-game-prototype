@@ -3,19 +3,17 @@ using UnityEngine.AI;
 
 public class GhostSpawner : MonoBehaviour
 {
-    [Header("Spawn Point / Parent")]
-    public Transform ghostRoot; // where the ghost spawns (can be your "Ghost" empty)
+    [Header("Ghost Root In Scene")]
+    public Transform ghostRoot; // Empty object in scene named "Ghost" (or whatever)
 
-    [Header("Ghost Brain Prefabs (NavMeshAgent is on these)")]
-    public GameObject[] ghostBrainPrefabs; // Echoe prefab etc
+    [Header("Ghost Brain Prefabs (NavMeshAgent + GhostMovement + Behavior)")]
+    public GameObject[] ghostBrainPrefabs;
 
     [Header("Ghost Model Prefabs (visuals only)")]
-    public GameObject[] ghostModelPrefabs; // bodies
+    public GameObject[] ghostModelPrefabs;
 
-    [Header("NavMesh")]
+    [Header("NavMesh Snap")]
     public float snapRadius = 8f;
-
-    private GameObject spawnedBrain;
 
     void Start()
     {
@@ -29,59 +27,56 @@ public class GhostSpawner : MonoBehaviour
             Debug.LogError("❌ GhostSpawner: ghostRoot not assigned.");
             return;
         }
-
         if (ghostBrainPrefabs == null || ghostBrainPrefabs.Length == 0)
         {
             Debug.LogError("❌ GhostSpawner: No ghostBrainPrefabs assigned.");
             return;
         }
-
         if (ghostModelPrefabs == null || ghostModelPrefabs.Length == 0)
         {
             Debug.LogError("❌ GhostSpawner: No ghostModelPrefabs assigned.");
             return;
         }
 
-        // Snap spawn to NavMesh so agent is valid
-        Vector3 spawnPos = ghostRoot.position;
-        if (!NavMesh.SamplePosition(spawnPos, out NavMeshHit hit, snapRadius, NavMesh.AllAreas))
+        // Pick random brain
+        GameObject brainPrefab = ghostBrainPrefabs[Random.Range(0, ghostBrainPrefabs.Length)];
+        GameObject brain = Instantiate(brainPrefab, ghostRoot.position, ghostRoot.rotation, ghostRoot);
+
+        // Snap brain to NavMesh (IMPORTANT because NavMeshAgent is on the brain)
+        if (NavMesh.SamplePosition(brain.transform.position, out NavMeshHit hit, snapRadius, NavMesh.AllAreas))
+        {
+            brain.transform.position = hit.position;
+        }
+        else
         {
             Debug.LogError("❌ GhostSpawner: No NavMesh near ghostRoot. Move ghostRoot closer to baked NavMesh.");
+            Destroy(brain);
             return;
         }
 
-        // 1) Spawn brain (this is the moving object because the agent is here)
-        GameObject brainPrefab = ghostBrainPrefabs[Random.Range(0, ghostBrainPrefabs.Length)];
-        spawnedBrain = Instantiate(brainPrefab, hit.position, Quaternion.identity);
-        spawnedBrain.name = brainPrefab.name;
+        // Create a model container under the brain (so we can toggle visuals only)
+        GameObject modelRootGO = new GameObject("Ghost Model");
+        modelRootGO.transform.SetParent(brain.transform, false);
+        modelRootGO.transform.localPosition = Vector3.zero;
+        modelRootGO.transform.localRotation = Quaternion.identity;
+        modelRootGO.transform.localScale = Vector3.one;
 
-        // Parent it under ghostRoot if you want it organized
-        spawnedBrain.transform.SetParent(ghostRoot, true);
-
-        // 2) Ensure a "GhostModel" child exists under the brain to hold visuals
-        Transform modelRoot = spawnedBrain.transform.Find("GhostModel");
-        if (modelRoot == null)
-        {
-            GameObject mr = new GameObject("GhostModel");
-            modelRoot = mr.transform;
-            modelRoot.SetParent(spawnedBrain.transform, false);
-            modelRoot.localPosition = Vector3.zero;
-            modelRoot.localRotation = Quaternion.identity;
-            modelRoot.localScale = Vector3.one;
-        }
-
-        // 3) Spawn a random visual model under GhostModel
+        // Spawn random model inside that container
         GameObject modelPrefab = ghostModelPrefabs[Random.Range(0, ghostModelPrefabs.Length)];
-        GameObject modelInstance = Instantiate(modelPrefab, modelRoot);
-        modelInstance.transform.localPosition = Vector3.zero;
-        modelInstance.transform.localRotation = Quaternion.identity;
-        modelInstance.transform.localScale = Vector3.one;
+        GameObject model = Instantiate(modelPrefab, modelRootGO.transform);
+        model.transform.localPosition = Vector3.zero;
+        model.transform.localRotation = Quaternion.identity;
+        model.transform.localScale = Vector3.one;
 
-        // 4) Let GhostMovement know what to toggle for visibility
-        GhostMovement gm = spawnedBrain.GetComponent<GhostMovement>();
-        if (gm != null)
+        // Give GhostMovement the modelRoot so it can toggle visibility
+        GhostMovement move = brain.GetComponent<GhostMovement>();
+        if (move != null)
         {
-            gm.SetModelRoot(modelRoot);
+            move.SetModelRoot(modelRootGO.transform);
+        }
+        else
+        {
+            Debug.LogWarning("⚠️ GhostSpawner: Spawned brain has no GhostMovement component.");
         }
     }
 }
