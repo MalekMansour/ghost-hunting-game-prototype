@@ -90,8 +90,11 @@ Has a higher chance of hunting at 50%-100% sanity.
 
 13 - Llorona
 A Ghost attracted to water.
+Has a higher chance of turning on sinks and showers.
+Wil get slightly more aggressive when sinks are turned off.
 Has a higher chance of hunting at 60% sanity and lower. 
-Has a special unique scream.
+Has a special very rare unique scream.
+
 
 14 - Doppelgänger
 A ghost that always roams around the player and repeats what the player says to the other players in the game. They will never find their own room, always following players.
@@ -196,8 +199,7 @@ Cannot equip more of the same upgrade category (example: cannot have 2 camera up
 Camera Upgrades:
 Radar that beeps when a ghost event happens
 Radar that beeps when the ghost is haunting
-Night Vision I: Basic green night vision
-Night Vision II: White night vision 
+Night Vision (Basic green night vision)
 
 Flashlight Upgrades:
 Higher Intensity Flashlight (2X)
@@ -280,3 +282,23 @@ An unforgiving experience where prolonged investigations rapidly become deadly a
 
 Custom
 Adjust settings to create your own experience.
+
+Ghost Events:
+
+Visual related:
+Ghost Mist
+Red Room Flash
+
+Noise related:
+Ghost singing
+Ghost grunting 
+Ghost laughing 
+Ghost crying
+
+Object related:
+Object Moving
+Door opening 
+Door closing
+Candle Blowout
+Radio turn on/off
+Sink turning on
