@@ -14,30 +14,33 @@ public class Sanity : MonoBehaviour
     [Tooltip("Seconds between each drain tick")]
     public float drainInterval = 24f;
 
-    [Header("UI")]
+    [Header("UI (Text)")]
     public TextMeshProUGUI sanityText;
 
-    // Drag the SanityBar_Fill Image here
-    public Image sanityFillImage;
+    [Header("UI (Bar - Width Shrink)")]
+    [Tooltip("RED bar RectTransform (child). This will shrink in width.")]
+    public RectTransform sanityBarFill;
 
-    [Tooltip("How fast the bar visually catches up (higher = snappier)")]
+    [Tooltip("BLACK bar RectTransform (parent/background). Used to get the full width.")]
+    public RectTransform sanityBarBG;
+
+    [Tooltip("How fast the bar visually catches up to the target (higher = faster)")]
     public float barSmoothSpeed = 6f;
 
     private float drainTimer;
-
-    // what the bar should be showing (0..1), smoothed toward target
-    private float currentFill01 = 1f;
+    private float currentBar01 = 1f;
 
     void Start()
     {
-        // Initialize the fill to match current sanity
-        currentFill01 = SanityToFill01(sanity);
-        UpdateSanityUI(immediateBar: true);
+        // Init bar to current sanity
+        currentBar01 = SanityTo01(sanity);
+        UpdateSanityUI();
+        ApplyBarImmediate();
     }
 
     void Update()
     {
-        // Drain logic (your tick system)
+        // Tick drain
         drainTimer += Time.deltaTime;
         if (drainTimer >= drainInterval)
         {
@@ -45,7 +48,7 @@ public class Sanity : MonoBehaviour
             drainTimer = 0f;
         }
 
-        // Smooth the bar every frame (even if sanity changes in ticks)
+        // Smooth bar every frame (so it looks like it's slowly draining)
         SmoothBar();
     }
 
@@ -61,30 +64,36 @@ public class Sanity : MonoBehaviour
         UpdateSanityUI();
     }
 
-    void SmoothBar()
+    private void SmoothBar()
     {
-        if (sanityFillImage == null) return;
+        if (sanityBarFill == null || sanityBarBG == null) return;
 
-        float target = SanityToFill01(sanity);
+        float target01 = SanityTo01(sanity);
 
-        // Smoothly move currentFill01 toward target
-        currentFill01 = Mathf.MoveTowards(
-            currentFill01,
-            target,
-            barSmoothSpeed * Time.deltaTime
-        );
+        // Smoothly approach the target value (0..1)
+        currentBar01 = Mathf.MoveTowards(currentBar01, target01, barSmoothSpeed * Time.deltaTime);
 
-        sanityFillImage.fillAmount = currentFill01;
+        // Set red bar width based on background width
+        float bgWidth = sanityBarBG.rect.width;
+        sanityBarFill.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, bgWidth * currentBar01);
     }
 
-    float SanityToFill01(float s) => Mathf.Clamp01(s / 100f);
+    private void ApplyBarImmediate()
+    {
+        if (sanityBarFill == null || sanityBarBG == null) return;
 
-    void UpdateSanityUI(bool immediateBar = false)
+        float bgWidth = sanityBarBG.rect.width;
+        sanityBarFill.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, bgWidth * SanityTo01(sanity));
+    }
+
+    private float SanityTo01(float s)
+    {
+        return Mathf.Clamp01(s / 100f);
+    }
+
+    private void UpdateSanityUI()
     {
         if (sanityText != null)
-            sanityText.text = $"Sanity: {Mathf.RoundToInt(sanity)}%";
-
-        if (immediateBar && sanityFillImage != null)
-            sanityFillImage.fillAmount = SanityToFill01(sanity);
+            sanityText.text = $"{Mathf.RoundToInt(sanity)}%";
     }
 }
