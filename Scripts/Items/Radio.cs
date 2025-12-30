@@ -10,9 +10,9 @@ public class Radio : MonoBehaviour
     public AudioSource audioSource;
     public AudioClip[] radioClips;
 
-    [Header("Units")]
-    [Tooltip("If empty, we'll auto-find Units on the audioChild.")]
-    public MonoBehaviour unitsComponent; // assign Units.cs here OR auto-find
+    [Header("Units (Noise Emitter)")]
+    public Units units;                 // <-- real Units reference
+    public float noiseWhenOn = 15f;      // <-- forced noise value when ON
 
     [Header("Cooldown")]
     public float toggleCooldown = 0.5f;
@@ -26,31 +26,18 @@ public class Radio : MonoBehaviour
 
     void Awake()
     {
-        // Ensure the audio child stays active (do NOT toggle it off/on)
+        // Keep the audio child object active so pickup/drop can't kill the audio source
         if (audioChild)
             audioChild.SetActive(true);
 
-        // Auto-find AudioSource if not set
         if (!audioSource)
             audioSource = GetComponentInChildren<AudioSource>(true);
 
-        // Auto-find Units.cs if not assigned
-        if (unitsComponent == null && audioChild != null)
-            unitsComponent = audioChild.GetComponent<MonoBehaviour>(); // fallback, but better below
-
-        // Better: try to find a component named "Units" specifically
-        if (unitsComponent == null && audioChild != null)
+        // Auto-find Units on the audio child (or anywhere under radio)
+        if (!units)
         {
-            // This finds any MonoBehaviour whose type name is "Units"
-            var monos = audioChild.GetComponents<MonoBehaviour>();
-            foreach (var m in monos)
-            {
-                if (m != null && m.GetType().Name == "Units")
-                {
-                    unitsComponent = m;
-                    break;
-                }
-            }
+            if (audioChild) units = audioChild.GetComponent<Units>();
+            if (!units) units = GetComponentInChildren<Units>(true);
         }
 
         if (audioSource)
@@ -60,8 +47,7 @@ public class Radio : MonoBehaviour
         }
 
         // OFF by default
-        SetUnitsEnabled(false);
-        StopAudioIfPlaying();
+        ForceOffState();
     }
 
     void Start()
@@ -71,6 +57,13 @@ public class Radio : MonoBehaviour
 
     void Update()
     {
+        // While ON, constantly enforce noise=15 (prevents it ever staying 0)
+        if (isOn && units != null)
+        {
+            if (!units.enabled) units.enabled = true;
+            units.noise = noiseWhenOn;
+        }
+
         if (!IsHeldByPlayer()) return;
 
         if (Input.GetKeyDown(useKey))
@@ -79,7 +72,7 @@ public class Radio : MonoBehaviour
 
     void OnEnable()
     {
-        // If pickup scripts disable/enable the radio object, restore audio if needed
+        // If the radio object gets toggled by pickup scripts, restore correct state
         SyncToState(force: true);
     }
 
@@ -101,21 +94,22 @@ public class Radio : MonoBehaviour
 
     void SyncToState(bool force)
     {
-        // Units.cs should only be active when radio is ON
-        SetUnitsEnabled(isOn);
-
         if (!audioSource) return;
 
-        // Optional rule: stop if dropped
+        // Optional: stop if dropped (audio only)
         if (!keepPlayingWhenDropped && !IsHeldByPlayer())
         {
             StopAudioIfPlaying();
+            // Noise should still match on/off state
+            if (isOn) ForceOnNoise();
+            else ForceOffNoise();
             return;
         }
 
         if (isOn)
         {
-            // Ensure clip exists
+            ForceOnNoise();
+
             if (radioClips != null && radioClips.Length > 0)
             {
                 if (audioSource.clip == null || (randomizeClipOnStart && !audioSource.isPlaying))
@@ -129,8 +123,31 @@ public class Radio : MonoBehaviour
         }
         else
         {
-            StopAudioIfPlaying();
+            ForceOffState();
         }
+    }
+
+    void ForceOnNoise()
+    {
+        if (units == null) return;
+
+        units.enabled = true;
+        units.noise = noiseWhenOn; // hard force
+    }
+
+    void ForceOffNoise()
+    {
+        if (units == null) return;
+
+        units.noise = 0f;
+        // disabling also triggers Units.OnDisable() which zeros everything (fine)
+        units.enabled = false;
+    }
+
+    void ForceOffState()
+    {
+        StopAudioIfPlaying();
+        ForceOffNoise();
     }
 
     void StopAudioIfPlaying()
@@ -139,12 +156,5 @@ public class Radio : MonoBehaviour
             audioSource.Stop();
     }
 
-    void SetUnitsEnabled(bool enabled)
-    {
-        if (unitsComponent != null)
-            unitsComponent.enabled = enabled;
-    }
-
-    // Optional: other scripts can read state
     public bool IsOn() => isOn;
 }
