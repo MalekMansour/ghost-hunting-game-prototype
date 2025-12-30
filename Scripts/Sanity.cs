@@ -11,28 +11,28 @@ public class Sanity : MonoBehaviour
     [Tooltip("How much sanity is drained each tick")]
     public float sanityDrainAmount = 1f;
 
-    [Tooltip("Seconds between each drain tick")]
+    [Tooltip("Seconds between each drain tick (will be overridden by difficulty)")]
     public float drainInterval = 24f;
 
     [Header("UI (Text)")]
     public TextMeshProUGUI sanityText;
 
     [Header("UI (Bar - Width Shrink)")]
-    [Tooltip("RED bar RectTransform (child). This will shrink in width.")]
     public RectTransform sanityBarFill;
-
-    [Tooltip("BLACK bar RectTransform (parent/background). Used to get the full width.")]
     public RectTransform sanityBarBG;
 
-    [Tooltip("How fast the bar visually catches up to the target (higher = faster)")]
     public float barSmoothSpeed = 6f;
 
     private float drainTimer;
     private float currentBar01 = 1f;
 
+    private const string DifficultyPrefKey = "SelectedDifficulty";
+    // 0 Casual, 1 Standard, 2 Professional, 3 Lethal (matches your menu enum order)
+
     void Start()
     {
-        // Init bar to current sanity
+        ApplyDifficultyDrainInterval();
+
         currentBar01 = SanityTo01(sanity);
         UpdateSanityUI();
         ApplyBarImmediate();
@@ -40,7 +40,6 @@ public class Sanity : MonoBehaviour
 
     void Update()
     {
-        // Tick drain
         drainTimer += Time.deltaTime;
         if (drainTimer >= drainInterval)
         {
@@ -48,8 +47,21 @@ public class Sanity : MonoBehaviour
             drainTimer = 0f;
         }
 
-        // Smooth bar every frame (so it looks like it's slowly draining)
         SmoothBar();
+    }
+
+    private void ApplyDifficultyDrainInterval()
+    {
+        int diff = PlayerPrefs.GetInt(DifficultyPrefKey, 1); 
+
+        switch (diff)
+        {
+            case 0: drainInterval = 28f; break; // Casual
+            case 1: drainInterval = 24f; break; // Standard
+            case 2: drainInterval = 20f; break; // Professional
+            case 3: drainInterval = 16f; break; // Lethal
+            default: drainInterval = 28f; break;
+        }
     }
 
     public void DrainSanity(float amount)
@@ -69,11 +81,8 @@ public class Sanity : MonoBehaviour
         if (sanityBarFill == null || sanityBarBG == null) return;
 
         float target01 = SanityTo01(sanity);
-
-        // Smoothly approach the target value (0..1)
         currentBar01 = Mathf.MoveTowards(currentBar01, target01, barSmoothSpeed * Time.deltaTime);
 
-        // Set red bar width based on background width
         float bgWidth = sanityBarBG.rect.width;
         sanityBarFill.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, bgWidth * currentBar01);
     }
@@ -86,10 +95,7 @@ public class Sanity : MonoBehaviour
         sanityBarFill.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, bgWidth * SanityTo01(sanity));
     }
 
-    private float SanityTo01(float s)
-    {
-        return Mathf.Clamp01(s / 100f);
-    }
+    private float SanityTo01(float s) => Mathf.Clamp01(s / 100f);
 
     private void UpdateSanityUI()
     {
