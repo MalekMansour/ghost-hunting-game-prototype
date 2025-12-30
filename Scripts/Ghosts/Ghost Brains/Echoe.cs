@@ -7,21 +7,26 @@ public class Echoe : MonoBehaviour
     public GhostMovement movement;
 
     [Header("Hearing")]
-    public float hearingRange = 10f;
-    public float minNoiseToReact = 0.1f;
+    public float hearingRange = 25f;
+    public float minNoiseToReact = 1f;
 
-    [Tooltip("How often Echoe scans the world for Units.noise.")]
-    public float noiseScanInterval = 0.25f;
+    [Tooltip("How often we scan for best target.")]
+    public float noiseScanInterval = 0.2f;
 
-    [Header("Noise Wander")]
-    public float noiseWanderRadius = 6f;
+    [Header("Camping")]
+    public float campRadius = 25f;
 
-    [Tooltip("How often Echoe re-asserts investigation on the current target.")]
-    public float investigateRefreshTime = 0.5f;
+    [Tooltip("How often we re-push InvestigateNoise while locked on (smaller = more priority).")]
+    public float forceInvestigateInterval = 0.05f; // 20x per second
+
+    [Header("Target Switching")]
+    public float switchMargin = 0.5f;
 
     private Units currentTarget;
     private float currentNoiseValue;
-    private float nextInvestigateRefreshTime;
+
+    private Coroutine scanRoutine;
+    private Coroutine forceRoutine;
 
     void Start()
     {
@@ -30,96 +35,122 @@ public class Echoe : MonoBehaviour
 
         if (movement == null)
         {
-            Debug.LogError("❌ Echoe: Missing GhostMovement on the same brain object.");
+            Debug.LogError("Echoe: Missing GhostMovement on the same brain object.");
             enabled = false;
             return;
         }
 
-        StartCoroutine(NoiseScanLoop());
+        scanRoutine = StartCoroutine(NoiseScanLoop());
     }
 
     IEnumerator NoiseScanLoop()
     {
-        WaitForSeconds wait = new WaitForSeconds(noiseScanInterval);
+        var wait = new WaitForSeconds(noiseScanInterval);
 
         while (true)
         {
-            ScanForNoiseAndUpdateTarget();
+            UpdateTarget();
             yield return wait;
         }
     }
 
-    void ScanForNoiseAndUpdateTarget()
+    void UpdateTarget()
     {
-        // includeInactive = true so we can still find them,
-        // but we will manually require isActiveAndEnabled.
-        Units[] all = FindObjectsOfType<Units>(true);
+        Vector3 pos = transform.position;
+
+        if (currentTarget != null)
+        {
+            if (!currentTarget.isActiveAndEnabled || currentTarget.noise <= minNoiseToReact)
+            {
+                ClearTarget();
+            }
+            else
+            {
+                float d = Vector3.Distance(pos, currentTarget.transform.position);
+                if (d > hearingRange)
+                    ClearTarget();
+            }
+        }
 
         Units best = null;
         float bestNoise = minNoiseToReact;
-        Vector3 pos = transform.position;
+
+        Units[] all = FindObjectsOfType<Units>(true);
 
         for (int i = 0; i < all.Length; i++)
         {
             Units u = all[i];
             if (u == null) continue;
-
-            // ✅ IMPORTANT: ignore disabled Units scripts or inactive objects
             if (!u.isActiveAndEnabled) continue;
 
             float n = u.noise;
-            if (n < bestNoise) continue;
+            if (n <= minNoiseToReact) continue;
 
             float d = Vector3.Distance(pos, u.transform.position);
             if (d > hearingRange) continue;
 
-            best = u;
-            bestNoise = n;
+            if (n > bestNoise)
+            {
+                best = u;
+                bestNoise = n;
+            }
         }
 
-        // If our current target became disabled/off, drop it instantly
-        if (currentTarget != null && !currentTarget.isActiveAndEnabled)
-        {
-            currentTarget = null;
-            currentNoiseValue = 0f;
-        }
-
-        // Nothing worth reacting to
         if (best == null)
         {
-            currentTarget = null;
-            currentNoiseValue = 0f;
+            if (currentTarget == null) return;
+            ClearTarget();
             return;
         }
 
-        // Switch to a new target ONLY if it's louder than what we're camping
-        if (currentTarget == null || bestNoise > currentNoiseValue + 0.001f)
+        if (currentTarget == null)
         {
-            currentTarget = best;
-            currentNoiseValue = bestNoise;
+            SetTarget(best, bestNoise);
+        }
+        else
+        {
+            float current = currentTarget.isActiveAndEnabled ? currentTarget.noise : 0f;
+            currentNoiseValue = current;
 
-            movement.investigateLoiterRadius = noiseWanderRadius;
+            if (best != currentTarget && bestNoise >= currentNoiseValue + switchMargin)
+                SetTarget(best, bestNoise);
+        }
+    }
 
-            // snap into noise mode instantly
-            nextInvestigateRefreshTime = 0f;
+    void SetTarget(Units u, float noiseValue)
+    {
+        currentTarget = u;
+        currentNoiseValue = noiseValue;
+
+        movement.investigateLoiterRadius = campRadius;
+
+        if (forceRoutine != null) StopCoroutine(forceRoutine);
+        forceRoutine = StartCoroutine(ForceInvestigateLoop());
+    }
+
+    IEnumerator ForceInvestigateLoop()
+    {
+        var wait = new WaitForSeconds(forceInvestigateInterval);
+
+        while (currentTarget != null)
+        {
+            movement.investigateLoiterRadius = campRadius;
+            movement.InvestigateNoise(currentTarget.transform.position);
+
+            yield return wait;
+        }
+    }
+
+    void ClearTarget()
+    {
+        currentTarget = null;
+        currentNoiseValue = 0f;
+
+        if (forceRoutine != null)
+        {
+            StopCoroutine(forceRoutine);
+            forceRoutine = null;
         }
 
-        // Keep investigating
-        if (currentTarget != null && currentTarget.noise >= minNoiseToReact)
-        {
-            if (Vector3.Distance(pos, currentTarget.transform.position) <= hearingRange)
-            {
-                if (Time.time >= nextInvestigateRefreshTime)
-                {
-                    movement.InvestigateNoise(currentTarget.transform.position);
-                    nextInvestigateRefreshTime = Time.time + investigateRefreshTime;
-                }
-            }
-            else
-            {
-                currentTarget = null;
-                currentNoiseValue = 0f;
-            }
-        }
     }
 }
