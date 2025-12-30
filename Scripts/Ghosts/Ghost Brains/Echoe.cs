@@ -4,19 +4,19 @@ using System.Collections;
 public class Echoe : MonoBehaviour
 {
     [Header("References")]
-    public GhostMovement movement; // auto-found if empty
+    public GhostMovement movement;
 
     [Header("Hearing")]
     public float hearingRange = 10f;
     public float minNoiseToReact = 0.1f;
 
-    [Tooltip("How often Echoe scans the world for Units.noise. Smaller = more reactive, bigger = cheaper CPU.")]
+    [Tooltip("How often Echoe scans the world for Units.noise.")]
     public float noiseScanInterval = 0.25f;
 
     [Header("Noise Wander")]
     public float noiseWanderRadius = 6f;
 
-    [Tooltip("How often Echoe re-asserts investigation on the current target (keeps it from going back to roaming).")]
+    [Tooltip("How often Echoe re-asserts investigation on the current target.")]
     public float investigateRefreshTime = 0.5f;
 
     private Units currentTarget;
@@ -51,7 +51,9 @@ public class Echoe : MonoBehaviour
 
     void ScanForNoiseAndUpdateTarget()
     {
-        Units[] all = FindObjectsOfType<Units>(false);
+        // includeInactive = true so we can still find them,
+        // but we will manually require isActiveAndEnabled.
+        Units[] all = FindObjectsOfType<Units>(true);
 
         Units best = null;
         float bestNoise = minNoiseToReact;
@@ -62,6 +64,9 @@ public class Echoe : MonoBehaviour
             Units u = all[i];
             if (u == null) continue;
 
+            // ✅ IMPORTANT: ignore disabled Units scripts or inactive objects
+            if (!u.isActiveAndEnabled) continue;
+
             float n = u.noise;
             if (n < bestNoise) continue;
 
@@ -70,6 +75,13 @@ public class Echoe : MonoBehaviour
 
             best = u;
             bestNoise = n;
+        }
+
+        // If our current target became disabled/off, drop it instantly
+        if (currentTarget != null && !currentTarget.isActiveAndEnabled)
+        {
+            currentTarget = null;
+            currentNoiseValue = 0f;
         }
 
         // Nothing worth reacting to
@@ -86,17 +98,15 @@ public class Echoe : MonoBehaviour
             currentTarget = best;
             currentNoiseValue = bestNoise;
 
-            // Set how wide we wander around the noise source
             movement.investigateLoiterRadius = noiseWanderRadius;
 
-            // Force an immediate investigate so it snaps into "noise mode" instantly
+            // snap into noise mode instantly
             nextInvestigateRefreshTime = 0f;
         }
 
-        // If we have a target, KEEP the ghost investigating it (prevents returning to roam)
+        // Keep investigating
         if (currentTarget != null && currentTarget.noise >= minNoiseToReact)
         {
-            // Still within hearing range?
             if (Vector3.Distance(pos, currentTarget.transform.position) <= hearingRange)
             {
                 if (Time.time >= nextInvestigateRefreshTime)
