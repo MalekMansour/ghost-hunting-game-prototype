@@ -300,5 +300,60 @@ Object Moving
 Door opening 
 Door closing
 Candle Blowout
-Radio turn on/off
 Sink turning on
+
+Levels & Rewards Calculation
+Casual: 1X
+Standard: 2X
+Professional: 3X
+Lethal: 5X
+
+250Xp from getting the ghost correct
+250Xp from staying alive
+5Xp from each ghost event that happens near the player
+75Xp from each ghost pursuits that happen
+Average XP gain: 700Xp
+
+Lvl1 -> Lvl2: 500Xp
+Lvl2 -> Lvl3: 550Xp
+Lvl3 -> Lvl4: 600Xp
+Lvl4 -> Lvl5: 750Xp 
+
+STANDARD MODE UNLOCKED
+Average XP gain: 1400Xp
+Lvl5 -> Lvl6: 1000Xp
+Lvl6 -> Lvl7: 1150Xp
+Lvl7 -> Lvl8: 1350Xp
+Lvl8 -> Lvl9: 1500Xp
+Lvl9 -> Lvl10: 1750Xp
+
+PROFESSIONAL MODE UNLOCKED
+Average XP gain: 2100Xp
+
+Lvl11 -> Lvl12: 2000Xp
+Lvl12 -> Lvl13: 2150Xp
+Lvl13 -> Lvl14: 2200Xp
+Lvl14 -> Lvl15: 2350Xp
+Lvl15 -> Lvl16: 2400Xp
+Lvl16 -> Lvl17: 2550Xp
+Lvl17 -> Lvl18: 2600Xp
+Lvl18 -> Lvl19: 2750Xp
+Lvl19 -> Lvl20: 2800Xp
+Lvl20 -> Lvl21: 2950Xp
+Lvl21 -> Lvl22: 3000Xp
+Lvl22 -> Lvl23: 3150Xp
+Lvl23 -> Lvl24: 3200Xp
+Lvl24 -> Lvl25: 3350Xp
+Lvl25 -> Lvl26: 3400Xp
+Lvl26 -> Lvl27: 3550Xp
+Lvl27 -> Lvl28: 3600Xp
+Lvl28 -> Lvl29: 3750Xp
+Lvl29 -> Lvl30: 3800Xp
+
+LETHAL MODE UNLOCKED
+Average XP gain: 3500Xp
+
+Lvl30 -> Lvl31: 4000Xp
+Lvl31 -> Lvl32: 4050Xp
+Lvl32 -> Lvl33: 4100Xp
+
