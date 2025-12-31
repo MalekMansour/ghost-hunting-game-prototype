@@ -15,15 +15,44 @@ public class GhostEvent : MonoBehaviour
         RedLight
     }
 
+    // -------- NEW: Per-event chance/weight --------
+    [System.Serializable]
+    public class EventChance
+    {
+        public AllowedEvent eventType;
+        [Range(0f, 100f)] public float weightPercent = 50f; // 0 = never, 100 = very likely
+    }
+
     [Header("Allowed Events")]
     public List<AllowedEvent> allowedEvents = new List<AllowedEvent>() { AllowedEvent.GhostSound };
 
     [Header("Event Timing")]
     public float eventCheckInterval = 12f;
-    [Range(0f, 1f)] public float eventChance = 0.6f;
+    [Range(0f, 1f)] public float eventChance = 0.6f; // global chance that ANY event happens on a check
+
+    [Header("Per-Event Chance (Weights)")]
+    [Tooltip("Weights only matter among Allowed Events. Example: set GhostSound=80, ItemThrow=20 to bias sounds.")]
+    public List<EventChance> perEventChances = new List<EventChance>()
+    {
+        new EventChance(){ eventType = AllowedEvent.GhostSound,    weightPercent = 60f },
+        new EventChance(){ eventType = AllowedEvent.ItemThrow,     weightPercent = 40f },
+        new EventChance(){ eventType = AllowedEvent.GhostMist,     weightPercent = 30f },
+        new EventChance(){ eventType = AllowedEvent.DoorMovement,  weightPercent = 25f },
+        new EventChance(){ eventType = AllowedEvent.CandleBlowout, weightPercent = 20f },
+        new EventChance(){ eventType = AllowedEvent.SinkToggle,    weightPercent = 15f },
+        new EventChance(){ eventType = AllowedEvent.RedLight,      weightPercent = 25f },
+    };
+
+    [Header("Event Retry")]
+    [Tooltip("If an event fails (no candle found etc), it will try another event up to this many times.")]
+    public int maxEventRerolls = 4;
 
     [Header("Player Affect")]
     public float sanityAffectRadius = 12f;
+
+    [Header("Sanity Targets (Optional)")]
+    [Tooltip("If you drag player Sanity scripts here, we won't need FindObjectsOfType(). If empty, auto-finds.")]
+    public List<Sanity> sanityTargets = new List<Sanity>();
 
     [Header("Ghost Sounds")]
     public AudioSource ghostAudioSource;
@@ -46,6 +75,7 @@ public class GhostEvent : MonoBehaviour
     public float settleSpeed = 0.15f;
     public float settleTime = 0.2f;
 
+    // You already had this in your file
     public GameObject mistObject;
 
     [Header("Don't throw held items")]
@@ -97,9 +127,11 @@ public class GhostEvent : MonoBehaviour
     [Header("Debug")]
     public bool debugLogs = false;
     public bool debugGizmos = true;
+    public bool debugSanity = true;
 
     private const string DifficultyPrefKey = "SelectedDifficulty"; // 0 casual, 1 standard, 2 pro, 3 lethal
 
+    // Your current values from the file
     private const float SOUND_CASUAL = 3f, SOUND_STANDARD = 5f, SOUND_PRO = 7f, SOUND_LETHAL = 9f;
     private const float THROW_CASUAL = 1f, THROW_STANDARD = 2f, THROW_PRO = 3f, THROW_LETHAL = 4f;
     private const float ENV_CASUAL = 4f, ENV_STANDARD = 6f, ENV_PRO = 8f, ENV_LETHAL = 10f;
@@ -112,6 +144,9 @@ public class GhostEvent : MonoBehaviour
         // Red light should be "itself" -> auto-find on ghost if not assigned
         if (!redLightSource)
             redLightSource = GetComponentInChildren<Light>(true);
+
+        // Ensure perEventChances contains all event types at least once (no breaking if list is empty)
+        EnsurePerEventChanceDefaults();
     }
 
     void Start()
@@ -136,46 +171,62 @@ public class GhostEvent : MonoBehaviour
             float roll = Random.value;
             if (roll > eventChance)
             {
-                Log($"Event check failed chance roll ({roll:0.00} > {eventChance:0.00}).");
+                Log($"Event check failed global chance ({roll:0.00} > {eventChance:0.00}).");
                 continue;
             }
 
-            AllowedEvent chosen = allowedEvents[Random.Range(0, allowedEvents.Count)];
-            Log($"Performing event: {chosen}");
+            // NEW: pick weighted event, and if it fails, reroll a few times
+            bool succeeded = false;
 
-            PerformEvent(chosen);
+            for (int attempt = 0; attempt < Mathf.Max(1, maxEventRerolls); attempt++)
+            {
+                AllowedEvent chosen = PickWeightedEventFromAllowed();
+                Log($"Attempt {attempt + 1}/{maxEventRerolls} -> Trying event: {chosen}");
+
+                succeeded = PerformEvent(chosen);
+
+                if (succeeded)
+                    break;
+
+                Log($"Event failed: {chosen} -> rerolling another event...");
+            }
+
+            if (!succeeded)
+                Log("All event attempts failed this tick (nothing valid nearby).");
         }
     }
 
-    void PerformEvent(AllowedEvent e)
+    // NEW: PerformEvent returns success/failure so we can reroll if needed
+    bool PerformEvent(AllowedEvent e)
     {
         switch (e)
         {
-            case AllowedEvent.GhostSound: DoGhostSound(); break;
-            case AllowedEvent.ItemThrow: DoItemThrow(); break;
-            case AllowedEvent.GhostMist: DoGhostMist(); break;
-            case AllowedEvent.DoorMovement: DoDoorMovement(); break;
-            case AllowedEvent.CandleBlowout: DoCandleBlowout(); break;
-            case AllowedEvent.SinkToggle: DoSinkToggle(); break;
-            case AllowedEvent.RedLight: DoRedLight(); break;
+            case AllowedEvent.GhostSound:     return DoGhostSound();
+            case AllowedEvent.ItemThrow:      return DoItemThrow();
+            case AllowedEvent.GhostMist:      return DoGhostMist();
+            case AllowedEvent.DoorMovement:   return DoDoorMovement();
+            case AllowedEvent.CandleBlowout:  return DoCandleBlowout();
+            case AllowedEvent.SinkToggle:     return DoSinkToggle();
+            case AllowedEvent.RedLight:       return DoRedLight();
+            default: return false;
         }
     }
 
     // ----------------------------
     // GHOST SOUND
     // ----------------------------
-    void DoGhostSound()
+    bool DoGhostSound()
     {
         if (!ghostAudioSource)
         {
             Log("GhostSound skipped: missing ghostAudioSource.");
-            return;
+            return false;
         }
 
         if (soundClips == null || soundClips.Length == 0)
         {
             Log("GhostSound skipped: no soundClips assigned.");
-            return;
+            return false;
         }
 
         ghostAudioSource.volume = soundVolume;
@@ -183,21 +234,23 @@ public class GhostEvent : MonoBehaviour
         ghostAudioSource.PlayOneShot(c);
 
         Log($"GhostSound played clip: {c.name}");
-        DrainSanityNearby(GetSoundDrain());
+        DrainSanityNearby(GetSoundDrain(), "GhostSound");
+        return true;
     }
 
     // ----------------------------
     // ITEM THROW (works even if items are normally kinematic)
     // ----------------------------
-    void DoItemThrow()
+    bool DoItemThrow()
     {
         if (!TryThrowNearbyItem())
         {
             Log("ItemThrow failed: no valid items found (or all were held).");
-            return;
+            return false;
         }
 
-        DrainSanityNearby(GetThrowDrain());
+        DrainSanityNearby(GetThrowDrain(), "ItemThrow");
+        return true;
     }
 
     bool TryThrowNearbyItem()
@@ -354,14 +407,14 @@ public class GhostEvent : MonoBehaviour
 
     Sanity FindNearestSanity()
     {
-        Sanity[] players = FindObjectsOfType<Sanity>(true);
-        if (players == null || players.Length == 0) return null;
+        List<Sanity> players = GetSanityTargets();
+        if (players == null || players.Count == 0) return null;
 
         Sanity best = null;
         float bestD = float.MaxValue;
         Vector3 p = transform.position;
 
-        for (int i = 0; i < players.Length; i++)
+        for (int i = 0; i < players.Count; i++)
         {
             Sanity s = players[i];
             if (s == null || !s.isActiveAndEnabled) continue;
@@ -379,18 +432,18 @@ public class GhostEvent : MonoBehaviour
     // ----------------------------
     // DOOR MOVEMENT (placeholder)
     // ----------------------------
-    void DoDoorMovement()
+    bool DoDoorMovement()
     {
         Collider[] hits = Physics.OverlapSphere(transform.position, sanityAffectRadius, doorLayer, QueryTriggerInteraction.Ignore);
         if (hits == null || hits.Length == 0)
         {
             Log("DoorMovement failed: no door colliders found in doorLayer within sanityAffectRadius.");
-            return;
+            return false;
         }
 
         Collider pick = hits[Random.Range(0, hits.Length)];
-
         Rigidbody rb = pick.attachedRigidbody;
+
         if (rb != null && !rb.isKinematic)
         {
             Vector3 pushDir = (pick.transform.position - transform.position);
@@ -406,39 +459,42 @@ public class GhostEvent : MonoBehaviour
             Log($"DoorMovement triggered near '{pick.name}' (no non-kinematic RB to push).");
         }
 
-        DrainSanityNearby(GetEnvDrain());
+        DrainSanityNearby(GetEnvDrain(), "DoorMovement");
+        return true;
     }
 
     // ----------------------------
     // SINK TOGGLE (placeholder)
     // ----------------------------
-    void DoSinkToggle()
+    bool DoSinkToggle()
     {
         Collider[] hits = Physics.OverlapSphere(transform.position, sanityAffectRadius, sinkLayer, QueryTriggerInteraction.Ignore);
         if (hits == null || hits.Length == 0)
         {
             Log("SinkToggle failed: no sink colliders found in sinkLayer within sanityAffectRadius.");
-            return;
+            return false;
         }
 
         Collider pick = hits[Random.Range(0, hits.Length)];
         Log($"SinkToggle triggered near '{pick.name}' (hook sink script later).");
 
-        DrainSanityNearby(GetEnvDrain());
+        DrainSanityNearby(GetEnvDrain(), "SinkToggle");
+        return true;
     }
 
     // ----------------------------
     // CANDLE BLOWOUT (flame is on candleLayer AND must have a collider)
     // ----------------------------
-    void DoCandleBlowout()
+    bool DoCandleBlowout()
     {
         Collider[] hits = Physics.OverlapSphere(transform.position, sanityAffectRadius, candleLayer, QueryTriggerInteraction.Ignore);
         if (hits == null || hits.Length == 0)
         {
-            Log("CandleBlowout failed: no flame colliders found in candleLayer (flame needs a collider).");
-            return;
+            Log("CandleBlowout failed: no flame colliders found in candleLayer.");
+            return false; // IMPORTANT: return false so we reroll another event
         }
 
+        // Try a few random flames; if none are lit, fail and reroll a new event
         for (int attempt = 0; attempt < 10; attempt++)
         {
             Collider pick = hits[Random.Range(0, hits.Length)];
@@ -452,107 +508,109 @@ public class GhostEvent : MonoBehaviour
             {
                 c.BlowOut();
                 Log($"CandleBlowout -> blew out candle '{c.name}' via flame '{pick.name}'");
-                DrainSanityNearby(GetEnvDrain());
-                return;
+                DrainSanityNearby(GetEnvDrain(), "CandleBlowout");
+                return true;
             }
         }
 
-        Log("CandleBlowout found flame colliders but none had a lit Candle parent.");
+        Log("CandleBlowout: flames found but none had a lit Candle parent.");
+        return false; // reroll another event
     }
 
     // ----------------------------
-    // GHOST MIST (particle + noise on ghost)
+    // GHOST MIST (your GhostMistFX logic stays; returns success)
     // ----------------------------
-    void DoGhostMist()
-{
-    // Auto-find GhostMistFX in the scene (once)
-    if (mistObject == null)
+    bool DoGhostMist()
     {
-        mistObject = GameObject.Find("GhostMistFX");
-
+        // Find GhostMistFX ONLY if you didn't assign mistObject
         if (mistObject == null)
         {
-            Log("GhostMist: could not find scene object named 'GhostMistFX'.");
-            return;
+            mistObject = GameObject.Find("GhostMistFX");
+            if (mistObject == null)
+            {
+                Log("GhostMist failed: could not find scene object named 'GhostMistFX'.");
+                return false;
+            }
         }
-    }
 
-    // Teleport beside the ghost
-    mistObject.transform.position = transform.TransformPoint(mistLocalOffset);
-    mistObject.transform.rotation = transform.rotation;
+        // Teleport beside the ghost
+        mistObject.transform.position = transform.TransformPoint(mistLocalOffset);
+        mistObject.transform.rotation = transform.rotation;
 
-    // Parent temporarily so it follows the ghost
-    mistObject.transform.SetParent(transform);
+        // Parent temporarily so it follows the ghost
+        mistObject.transform.SetParent(transform);
 
-    // Enable if disabled
-    if (!mistObject.activeSelf)
-        mistObject.SetActive(true);
+        // Enable if disabled
+        if (!mistObject.activeSelf)
+            mistObject.SetActive(true);
 
-    // Restart all particle systems cleanly
-    ParticleSystem[] systems = mistObject.GetComponentsInChildren<ParticleSystem>(true);
-    for (int i = 0; i < systems.Length; i++)
-    {
-        if (systems[i] == null) continue;
-        systems[i].Clear(true);
-        systems[i].Play(true);
-    }
-
-    // Auto-disable after lifetime
-    StopCoroutine(nameof(DisableMistAfterTime));
-    StartCoroutine(DisableMistAfterTime(mistLifetime));
-
-    Log($"GhostMist triggered using GhostMistFX for {mistLifetime:0.00}s");
-
-    // Play mist noise ON THE GHOST
-    if (ghostAudioSource != null && mistSoundClips != null && mistSoundClips.Length > 0)
-    {
-        ghostAudioSource.volume = mistSoundVolume;
-        AudioClip c = mistSoundClips[Random.Range(0, mistSoundClips.Length)];
-        ghostAudioSource.PlayOneShot(c);
-    }
-
-    DrainSanityNearby(GetEnvDrain());
-}
-IEnumerator DisableMistAfterTime(float t)
-{
-    yield return new WaitForSeconds(Mathf.Max(0.05f, t));
-
-    if (mistObject != null)
-    {
-        // stop particles nicely then disable
+        // Restart all particle systems cleanly
         ParticleSystem[] systems = mistObject.GetComponentsInChildren<ParticleSystem>(true);
+        bool anySystem = false;
         for (int i = 0; i < systems.Length; i++)
         {
             if (systems[i] == null) continue;
-            systems[i].Stop(true, ParticleSystemStopBehavior.StopEmitting);
+            anySystem = true;
+            systems[i].Clear(true);
+            systems[i].Play(true);
         }
 
-        // Detach so it doesn't stay parented forever
-        mistObject.transform.SetParent(null);
+        StopCoroutine(nameof(DisableMistAfterTime));
+        StartCoroutine(DisableMistAfterTime(mistLifetime));
 
-        mistObject.SetActive(false);
+        Log($"GhostMist triggered using '{mistObject.name}' for {mistLifetime:0.00}s");
+
+        // Play mist noise ON THE GHOST
+        if (ghostAudioSource != null && mistSoundClips != null && mistSoundClips.Length > 0)
+        {
+            ghostAudioSource.volume = mistSoundVolume;
+            AudioClip c = mistSoundClips[Random.Range(0, mistSoundClips.Length)];
+            ghostAudioSource.PlayOneShot(c);
+        }
+
+        DrainSanityNearby(GetEnvDrain(), "GhostMist");
+
+        // If it had no particles at all, still count as success (since you said it shouldn't care)
+        return true;
     }
-}
+
+    IEnumerator DisableMistAfterTime(float t)
+    {
+        yield return new WaitForSeconds(Mathf.Max(0.05f, t));
+
+        if (mistObject != null)
+        {
+            ParticleSystem[] systems = mistObject.GetComponentsInChildren<ParticleSystem>(true);
+            for (int i = 0; i < systems.Length; i++)
+            {
+                if (systems[i] == null) continue;
+                systems[i].Stop(true, ParticleSystemStopBehavior.StopEmitting);
+            }
+
+            mistObject.transform.SetParent(null);
+            mistObject.SetActive(false);
+        }
+    }
 
     // ----------------------------
     // RED LIGHT (ghost light flashes red)
     // ----------------------------
-    void DoRedLight()
+    bool DoRedLight()
     {
-        // Light source should be itself: auto-find if not assigned
         if (redLightSource == null)
             redLightSource = GetComponentInChildren<Light>(true);
 
         if (redLightSource == null)
         {
-            Log("RedLight skipped: no Light found on ghost.");
-            return;
+            Log("RedLight failed: no Light found on ghost.");
+            return false;
         }
 
         StopCoroutine(nameof(RedLightRoutine));
         StartCoroutine(nameof(RedLightRoutine));
 
-        DrainSanityNearby(GetEnvDrain());
+        DrainSanityNearby(GetEnvDrain(), "RedLight");
+        return true;
     }
 
     IEnumerator RedLightRoutine()
@@ -584,25 +642,82 @@ IEnumerator DisableMistAfterTime(float t)
     }
 
     // ----------------------------
-    // SANITY DRAIN
+    // SANITY DRAIN (FIXED + DEBUG)
     // ----------------------------
-    void DrainSanityNearby(float percent)
+    void DrainSanityNearby(float percent, string reason)
+{
+    if (percent <= 0f) return;
+
+    List<Sanity> players = GetSanityTargets();
+    if (players == null || players.Count == 0)
     {
-        if (percent <= 0f) return;
+        if (debugSanity) Log($"SanityDrain skipped: no Sanity targets found for reason={reason}.");
+        return;
+    }
 
-        Sanity[] players = FindObjectsOfType<Sanity>(true);
-        Vector3 gpos = transform.position;
+    Vector3 ghostPos = transform.position;
+    bool affectedAnyone = false;
 
-        for (int i = 0; i < players.Length; i++)
+    for (int i = 0; i < players.Count; i++)
+    {
+        Sanity s = players[i];
+        if (s == null || !s.isActiveAndEnabled) continue;
+
+        // IMPORTANT: Sanity is a child, so use player root (or camera) for distance
+        Vector3 playerPos = GetPlayerPositionForSanity(s);
+
+        float d = Vector3.Distance(ghostPos, playerPos);
+        if (d > sanityAffectRadius)
         {
-            Sanity s = players[i];
-            if (s == null || !s.isActiveAndEnabled) continue;
-
-            float d = Vector3.Distance(gpos, s.transform.position);
-            if (d > sanityAffectRadius) continue;
-
-            s.DrainSanity(percent);
+            if (debugSanity)
+                Log($"SanityDrain [{reason}] -> {s.name} OUTSIDE radius. dist={d:0.0} radius={sanityAffectRadius:0.0} playerPos={playerPos}");
+            continue;
         }
+
+        float before = s.sanity;
+        s.DrainSanity(percent);
+        float after = s.sanity;
+
+        affectedAnyone = true;
+
+        if (debugSanity)
+            Log($"SanityDrain [{reason}] -> {s.name} dist={d:0.0} -{percent}% ({before:0.0} -> {after:0.0})");
+    }
+
+    if (debugSanity && !affectedAnyone)
+        Log($"SanityDrain [{reason}] -> No players in radius {sanityAffectRadius:0.0}.");
+}
+
+Vector3 GetPlayerPositionForSanity(Sanity s)
+{
+    // If you're singleplayer, Camera.main is the best "player position"
+    // BUT only use it if the sanity object is part of the same hierarchy as the camera.
+    if (Camera.main != null)
+    {
+        // If the sanity is under the same root as the main camera, use camera position
+        // (good for "in front of me" feel)
+        Transform sanityRoot = s.transform.root;
+        Transform camRoot = Camera.main.transform.root;
+
+        if (sanityRoot == camRoot)
+            return Camera.main.transform.position;
+    }
+
+    // Otherwise use the player root (works for most setups)
+    return s.transform.root.position;
+}
+
+    List<Sanity> GetSanityTargets()
+    {
+        // If you assigned them, use them (fast + reliable)
+        if (sanityTargets != null && sanityTargets.Count > 0)
+            return sanityTargets;
+
+        // Otherwise auto-find
+        Sanity[] found = FindObjectsOfType<Sanity>(true);
+        if (found == null || found.Length == 0) return new List<Sanity>();
+
+        return new List<Sanity>(found);
     }
 
     float GetSoundDrain()
@@ -647,6 +762,79 @@ IEnumerator DisableMistAfterTime(float t)
         if (diff < 0) diff = 0;
         if (diff > 3) diff = 3;
         return diff;
+    }
+
+    // -------- NEW: Weighted picker --------
+    AllowedEvent PickWeightedEventFromAllowed()
+    {
+        // Build weights only for allowed events
+        float total = 0f;
+        List<AllowedEvent> choices = new List<AllowedEvent>();
+        List<float> weights = new List<float>();
+
+        for (int i = 0; i < allowedEvents.Count; i++)
+        {
+            AllowedEvent e = allowedEvents[i];
+            float w = Mathf.Max(0f, GetWeightForEvent(e));
+            if (w <= 0f) continue;
+
+            choices.Add(e);
+            weights.Add(w);
+            total += w;
+        }
+
+        // If weights are all zero, fallback to uniform random among allowed
+        if (choices.Count == 0 || total <= 0.0001f)
+            return allowedEvents[Random.Range(0, allowedEvents.Count)];
+
+        float r = Random.Range(0f, total);
+        float acc = 0f;
+
+        for (int i = 0; i < choices.Count; i++)
+        {
+            acc += weights[i];
+            if (r <= acc)
+                return choices[i];
+        }
+
+        return choices[choices.Count - 1];
+    }
+
+    float GetWeightForEvent(AllowedEvent e)
+    {
+        if (perEventChances == null) return 1f;
+
+        for (int i = 0; i < perEventChances.Count; i++)
+        {
+            if (perEventChances[i] != null && perEventChances[i].eventType == e)
+                return perEventChances[i].weightPercent;
+        }
+
+        // If missing from list, default weight
+        return 1f;
+    }
+
+    void EnsurePerEventChanceDefaults()
+    {
+        if (perEventChances == null)
+            perEventChances = new List<EventChance>();
+
+        // Make sure each enum exists at least once, so your inspector doesn't “miss” entries
+        foreach (AllowedEvent e in System.Enum.GetValues(typeof(AllowedEvent)))
+        {
+            bool exists = false;
+            for (int i = 0; i < perEventChances.Count; i++)
+            {
+                if (perEventChances[i] != null && perEventChances[i].eventType == e)
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                perEventChances.Add(new EventChance() { eventType = e, weightPercent = 25f });
+        }
     }
 
     void Log(string msg)
