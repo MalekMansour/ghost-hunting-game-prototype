@@ -54,6 +54,15 @@ public class GhostEvent : MonoBehaviour
     [Tooltip("If you drag player Sanity scripts here, we won't need FindObjectsOfType(). If empty, auto-finds.")]
     public List<Sanity> sanityTargets = new List<Sanity>();
 
+    [Header("Event Origin (IMPORTANT)")]
+    [Tooltip("Drag the visible ghost model/root here. This position is used for all event distance checks.")]
+    public Transform eventOrigin;
+
+    [Header("Player Detection")]
+    [Tooltip("Layer that your player cylinder/capsule is on (ex: Player).")]
+    public LayerMask playerLayer;
+    public bool usePlayerLayerDetection = true; 
+
     [Header("Ghost Sounds")]
     public AudioSource ghostAudioSource;
     public AudioClip[] soundClips;
@@ -75,7 +84,6 @@ public class GhostEvent : MonoBehaviour
     public float settleSpeed = 0.15f;
     public float settleTime = 0.2f;
 
-    // You already had this in your file
     public GameObject mistObject;
 
     [Header("Don't throw held items")]
@@ -196,7 +204,6 @@ public class GhostEvent : MonoBehaviour
         }
     }
 
-    // NEW: PerformEvent returns success/failure so we can reroll if needed
     bool PerformEvent(AllowedEvent e)
     {
         switch (e)
@@ -648,44 +655,84 @@ public class GhostEvent : MonoBehaviour
 {
     if (percent <= 0f) return;
 
-    List<Sanity> players = GetSanityTargets();
-    if (players == null || players.Count == 0)
+    Vector3 gpos = GetEventPos();
+    bool affected = false;
+
+    // BEST: detect the actual player cylinder/collider
+    if (usePlayerLayerDetection)
     {
-        if (debugSanity) Log($"SanityDrain skipped: no Sanity targets found for reason={reason}.");
+        Collider[] cols = Physics.OverlapSphere(gpos, sanityAffectRadius, playerLayer, QueryTriggerInteraction.Ignore);
+        if (cols == null || cols.Length == 0)
+        {
+            if (debugSanity) Log($"SanityDrain [{reason}] -> No PLAYER colliders in radius {sanityAffectRadius:0.0}. GhostPos={gpos}");
+            return;
+        }
+
+        for (int i = 0; i < cols.Length; i++)
+        {
+            Collider c = cols[i];
+            if (c == null) continue;
+
+            // Find Sanity anywhere on that player's hierarchy
+            Sanity s = c.GetComponentInParent<Sanity>();
+            if (s == null) s = c.GetComponentInChildren<Sanity>();
+
+            if (s == null || !s.isActiveAndEnabled)
+            {
+                if (debugSanity) Log($"SanityDrain [{reason}] -> Found player collider '{c.name}' but no enabled Sanity in parent/children.");
+                continue;
+            }
+
+            float before = s.sanity;
+            s.DrainSanity(percent);
+            float after = s.sanity;
+
+            affected = true;
+
+            if (debugSanity)
+            {
+                float d = Vector3.Distance(gpos, c.bounds.center);
+                Log($"SanityDrain [{reason}] -> HIT '{s.name}' via '{c.name}' dist={d:0.0} -{percent}% ({before:0.0}->{after:0.0}) GhostPos={gpos}");
+            }
+        }
+
+        if (!affected && debugSanity)
+            Log($"SanityDrain [{reason}] -> Player colliders were in range, but no Sanity component found/enabled.");
         return;
     }
 
-    Vector3 ghostPos = transform.position;
-    bool affectedAnyone = false;
+    // Fallback: old method (FindObjectsOfType)
+    List<Sanity> players = GetSanityTargets();
+    if (players == null || players.Count == 0)
+    {
+        if (debugSanity) Log($"SanityDrain [{reason}] -> No Sanity targets found.");
+        return;
+    }
 
     for (int i = 0; i < players.Count; i++)
     {
         Sanity s = players[i];
         if (s == null || !s.isActiveAndEnabled) continue;
 
-        // IMPORTANT: Sanity is a child, so use player root (or camera) for distance
-        Vector3 playerPos = GetPlayerPositionForSanity(s);
-
-        float d = Vector3.Distance(ghostPos, playerPos);
-        if (d > sanityAffectRadius)
-        {
-            if (debugSanity)
-                Log($"SanityDrain [{reason}] -> {s.name} OUTSIDE radius. dist={d:0.0} radius={sanityAffectRadius:0.0} playerPos={playerPos}");
-            continue;
-        }
+        float d = Vector3.Distance(gpos, s.transform.root.position);
+        if (d > sanityAffectRadius) continue;
 
         float before = s.sanity;
         s.DrainSanity(percent);
         float after = s.sanity;
 
-        affectedAnyone = true;
+        affected = true;
 
         if (debugSanity)
-            Log($"SanityDrain [{reason}] -> {s.name} dist={d:0.0} -{percent}% ({before:0.0} -> {after:0.0})");
+            Log($"SanityDrain [{reason}] -> '{s.name}' dist={d:0.0} -{percent}% ({before:0.0}->{after:0.0}) GhostPos={gpos}");
     }
 
-    if (debugSanity && !affectedAnyone)
-        Log($"SanityDrain [{reason}] -> No players in radius {sanityAffectRadius:0.0}.");
+    if (debugSanity && !affected)
+        Log($"SanityDrain [{reason}] -> No players in radius {sanityAffectRadius:0.0}. GhostPos={gpos}");
+}
+    Vector3 GetEventPos()
+{
+    return (eventOrigin != null) ? eventOrigin.position : transform.position;
 }
 
 Vector3 GetPlayerPositionForSanity(Sanity s)
