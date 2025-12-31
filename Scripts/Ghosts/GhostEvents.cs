@@ -46,6 +46,8 @@ public class GhostEvent : MonoBehaviour
     public float settleSpeed = 0.15f;
     public float settleTime = 0.2f;
 
+    public GameObject mistObject;
+
     [Header("Don't throw held items")]
     [Tooltip("If an item is parented under an object whose name contains these words, it won't be thrown.")]
     public string[] heldParentNameKeywords = new string[] { "hand", "holdpoint" };
@@ -63,10 +65,34 @@ public class GhostEvent : MonoBehaviour
     [Tooltip("Layer(s) that count as CANDLE FLAMES (flame needs a collider).")]
     public LayerMask candleLayer;
 
-    [Header("Red Light")]
+    [Header("Red Light (uses ghost light)")]
+    [Tooltip("If empty, we auto-find a Light on the ghost (self/children).")]
     public Light redLightSource;
+
+    [Tooltip("How many flashes happen.")]
     public int redLightFlashes = 3;
+
+    [Tooltip("Total duration of the effect (seconds).")]
     public float redLightDuration = 1.0f;
+
+    [Tooltip("How bright the flash gets (multiplier).")]
+    public float redLightIntensityMultiplier = 1.5f;
+
+    [Header("Ghost Mist")]
+    [Tooltip("Particle prefab to spawn on the ghost (ParticleSystem prefab).")]
+    public ParticleSystem mistPrefab;
+
+    [Tooltip("Where the mist spawns relative to the ghost.")]
+    public Vector3 mistLocalOffset = new Vector3(0f, 0.2f, 0f);
+
+    [Tooltip("How long before the spawned mist object is destroyed.")]
+    public float mistLifetime = 2.5f;
+
+    [Tooltip("Optional mist sound clips (plays on ghostAudioSource).")]
+    public AudioClip[] mistSoundClips;
+
+    [Range(0f, 2f)]
+    public float mistSoundVolume = 1f;
 
     [Header("Debug")]
     public bool debugLogs = false;
@@ -74,14 +100,18 @@ public class GhostEvent : MonoBehaviour
 
     private const string DifficultyPrefKey = "SelectedDifficulty"; // 0 casual, 1 standard, 2 pro, 3 lethal
 
-    private const float SOUND_CASUAL = 1f, SOUND_STANDARD = 2f, SOUND_PRO = 3f, SOUND_LETHAL = 4f;
-    private const float THROW_CASUAL = 2f, THROW_STANDARD = 4f, THROW_PRO = 6f, THROW_LETHAL = 8f;
-    private const float ENV_CASUAL = 1f, ENV_STANDARD = 2f, ENV_PRO = 3f, ENV_LETHAL = 4f;
+    private const float SOUND_CASUAL = 3f, SOUND_STANDARD = 5f, SOUND_PRO = 7f, SOUND_LETHAL = 9f;
+    private const float THROW_CASUAL = 1f, THROW_STANDARD = 2f, THROW_PRO = 3f, THROW_LETHAL = 4f;
+    private const float ENV_CASUAL = 4f, ENV_STANDARD = 6f, ENV_PRO = 8f, ENV_LETHAL = 10f;
 
     void Awake()
     {
         if (!ghostAudioSource)
             ghostAudioSource = GetComponent<AudioSource>();
+
+        // Red light should be "itself" -> auto-find on ghost if not assigned
+        if (!redLightSource)
+            redLightSource = GetComponentInChildren<Light>(true);
     }
 
     void Start()
@@ -177,7 +207,6 @@ public class GhostEvent : MonoBehaviour
             return false;
 
         Transform playerCam = (Camera.main != null) ? Camera.main.transform : null;
-
         List<Rigidbody> candidates = new List<Rigidbody>();
 
         for (int i = 0; i < hits.Length; i++)
@@ -220,7 +249,6 @@ public class GhostEvent : MonoBehaviour
 
     bool IsHeldByPlayer(Transform item)
     {
-        // If item (or its parents) is under something named "hand"/"holdpoint", treat it as held
         Transform t = item;
         int safety = 0;
 
@@ -433,22 +461,91 @@ public class GhostEvent : MonoBehaviour
     }
 
     // ----------------------------
-    // GHOST MIST (placeholder)
+    // GHOST MIST (particle + noise on ghost)
     // ----------------------------
     void DoGhostMist()
+{
+    // Auto-find GhostMistFX in the scene (once)
+    if (mistObject == null)
     {
-        Log("GhostMist triggered (VFX placeholder).");
-        DrainSanityNearby(GetEnvDrain());
+        mistObject = GameObject.Find("GhostMistFX");
+
+        if (mistObject == null)
+        {
+            Log("GhostMist: could not find scene object named 'GhostMistFX'.");
+            return;
+        }
     }
 
+    // Teleport beside the ghost
+    mistObject.transform.position = transform.TransformPoint(mistLocalOffset);
+    mistObject.transform.rotation = transform.rotation;
+
+    // Parent temporarily so it follows the ghost
+    mistObject.transform.SetParent(transform);
+
+    // Enable if disabled
+    if (!mistObject.activeSelf)
+        mistObject.SetActive(true);
+
+    // Restart all particle systems cleanly
+    ParticleSystem[] systems = mistObject.GetComponentsInChildren<ParticleSystem>(true);
+    for (int i = 0; i < systems.Length; i++)
+    {
+        if (systems[i] == null) continue;
+        systems[i].Clear(true);
+        systems[i].Play(true);
+    }
+
+    // Auto-disable after lifetime
+    StopCoroutine(nameof(DisableMistAfterTime));
+    StartCoroutine(DisableMistAfterTime(mistLifetime));
+
+    Log($"GhostMist triggered using GhostMistFX for {mistLifetime:0.00}s");
+
+    // Play mist noise ON THE GHOST
+    if (ghostAudioSource != null && mistSoundClips != null && mistSoundClips.Length > 0)
+    {
+        ghostAudioSource.volume = mistSoundVolume;
+        AudioClip c = mistSoundClips[Random.Range(0, mistSoundClips.Length)];
+        ghostAudioSource.PlayOneShot(c);
+    }
+
+    DrainSanityNearby(GetEnvDrain());
+}
+IEnumerator DisableMistAfterTime(float t)
+{
+    yield return new WaitForSeconds(Mathf.Max(0.05f, t));
+
+    if (mistObject != null)
+    {
+        // stop particles nicely then disable
+        ParticleSystem[] systems = mistObject.GetComponentsInChildren<ParticleSystem>(true);
+        for (int i = 0; i < systems.Length; i++)
+        {
+            if (systems[i] == null) continue;
+            systems[i].Stop(true, ParticleSystemStopBehavior.StopEmitting);
+        }
+
+        // Detach so it doesn't stay parented forever
+        mistObject.transform.SetParent(null);
+
+        mistObject.SetActive(false);
+    }
+}
+
     // ----------------------------
-    // RED LIGHT
+    // RED LIGHT (ghost light flashes red)
     // ----------------------------
     void DoRedLight()
     {
+        // Light source should be itself: auto-find if not assigned
+        if (redLightSource == null)
+            redLightSource = GetComponentInChildren<Light>(true);
+
         if (redLightSource == null)
         {
-            Log("RedLight skipped: redLightSource not assigned.");
+            Log("RedLight skipped: no Light found on ghost.");
             return;
         }
 
@@ -462,15 +559,18 @@ public class GhostEvent : MonoBehaviour
     {
         Color original = redLightSource.color;
         float originalIntensity = redLightSource.intensity;
+        bool originalEnabled = redLightSource.enabled;
 
         int flashes = Mathf.Max(1, redLightFlashes);
         float duration = Mathf.Max(0.05f, redLightDuration);
         float step = duration / (flashes * 2f);
 
+        redLightSource.enabled = true;
+
         for (int i = 0; i < flashes; i++)
         {
             redLightSource.color = Color.red;
-            redLightSource.intensity = originalIntensity * 1.5f;
+            redLightSource.intensity = originalIntensity * Mathf.Max(1f, redLightIntensityMultiplier);
             yield return new WaitForSeconds(step);
 
             redLightSource.color = original;
@@ -480,6 +580,7 @@ public class GhostEvent : MonoBehaviour
 
         redLightSource.color = original;
         redLightSource.intensity = originalIntensity;
+        redLightSource.enabled = originalEnabled;
     }
 
     // ----------------------------
