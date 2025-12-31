@@ -137,12 +137,12 @@ public class GhostEvent : MonoBehaviour
     public bool debugGizmos = true;
     public bool debugSanity = true;
 
-    private const string DifficultyPrefKey = "SelectedDifficulty"; // 0 casual, 1 standard, 2 pro, 3 lethal
+    private const string DifficultyPrefKey = "SelectedDifficulty"; 
 
     // Your current values from the file
     private const float SOUND_CASUAL = 3f, SOUND_STANDARD = 5f, SOUND_PRO = 7f, SOUND_LETHAL = 9f;
     private const float THROW_CASUAL = 1f, THROW_STANDARD = 2f, THROW_PRO = 3f, THROW_LETHAL = 4f;
-    private const float ENV_CASUAL = 4f, ENV_STANDARD = 6f, ENV_PRO = 8f, ENV_LETHAL = 10f;
+    private const float ENV_CASUAL = 2f, ENV_STANDARD = 4f, ENV_PRO = 6f, ENV_LETHAL = 8f;
 
     void Awake()
     {
