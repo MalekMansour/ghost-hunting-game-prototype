@@ -52,6 +52,10 @@ public class GhostPursuit : MonoBehaviour
     public float touchRadius = 1.0f;
     public float touchCooldown = 1.2f;
 
+    [Header("Touch SFX (Scream)")]
+    public AudioClip[] touchScreamClips;
+    [Range(0f, 2f)] public float touchScreamVolume = 1f;
+
     [Header("Flashlight Flicker (Main Camera Light)")]
     public Light playerFlashlight;
     public float flashlightNormalIntensity = 50f;
@@ -60,10 +64,25 @@ public class GhostPursuit : MonoBehaviour
     public float flickerIntervalClose = 0.08f;
 
     [Header("Hunt Visibility")]
-    public bool forceVisibleDuringHunt = true;
+    [Tooltip("If true, we override GhostMovement visibility and control modelRoot during hunt.")]
+    public bool controlVisibilityDuringHunt = true;
 
-    [Header("Hit UI Effect (Optional)")]
+    [Tooltip("The chance per cycle that the ghost will appear (visible) vs stay hidden.")]
+    [Range(0f, 1f)] public float huntVisibleChance = 0.85f;
+
+    [Tooltip("How long the ghost stays visible when it appears.")]
+    public Vector2 huntVisibleDurationRange = new Vector2(0.8f, 2.0f);
+
+    [Tooltip("How long the ghost stays invisible between appearances.")]
+    public Vector2 huntInvisibleDurationRange = new Vector2(0.15f, 0.55f);
+
+    [Header("Hit UI Effect (Stun)")]
+    [Tooltip("Optional: Drag your Image here. If left empty, we will auto-find an Image named 'Stunned' even if disabled.")]
     public Image stunOverlay;
+
+    [Tooltip("Name to auto-find in the canvas (works even if disabled).")]
+    public string stunOverlayName = "Stunned";
+
     public float stunDuration = 1.0f;
     [Range(0f, 1f)] public float stunAlpha = 0.45f;
 
@@ -74,6 +93,10 @@ public class GhostPursuit : MonoBehaviour
     public Vector2 gruntIntervalRange = new Vector2(1.2f, 2.6f);
     public float footstepInterval = 0.45f;
     [Range(0f, 2f)] public float huntAudioVolume = 1f;
+    [Header("Per-SFX Volume Scales (3D-safe)")]
+    [Range(0f, 10f)] public float gruntVolumeScale = 2.5f;
+    [Range(0f, 10f)] public float footstepVolumeScale = 1.0f;
+    [Range(0f, 10f)] public float screamVolumeScale = 3.5f;
 
     [Header("Debug")]
     public bool debugLogs = false;
@@ -109,6 +132,7 @@ public class GhostPursuit : MonoBehaviour
     // visibility cache
     private bool cachedModelActive;
     private Transform cachedModelRoot;
+    private Coroutine huntVisibilityRoutine;
 
     private const string DifficultyPrefKey = "SelectedDifficulty"; // 0 casual,1 standard,2 pro,3 lethal
 
@@ -124,6 +148,10 @@ public class GhostPursuit : MonoBehaviour
             huntAudioSource = GetComponent<AudioSource>();
 
         CacheFlashlightFromMainCamera();
+
+        // Auto-find the stunned image if user didn't assign it
+        if (stunOverlay == null)
+            stunOverlay = FindUIImageEvenIfDisabled(stunOverlayName);
     }
 
     void Start()
@@ -259,12 +287,23 @@ public class GhostPursuit : MonoBehaviour
             agent.autoBraking = false;
         }
 
-        // Make visible during hunt
-        if (forceVisibleDuringHunt && movement != null && movement.modelRoot != null)
+        // Cache modelRoot and initial active state
+        if (movement != null && movement.modelRoot != null)
         {
             cachedModelRoot = movement.modelRoot;
             cachedModelActive = cachedModelRoot.gameObject.activeSelf;
-            cachedModelRoot.gameObject.SetActive(true);
+
+            // Start hunt visibility routine
+            if (controlVisibilityDuringHunt)
+            {
+                if (huntVisibilityRoutine != null) StopCoroutine(huntVisibilityRoutine);
+                huntVisibilityRoutine = StartCoroutine(HuntVisibilityLoop());
+            }
+            else
+            {
+                // fallback: always on during hunt
+                cachedModelRoot.gameObject.SetActive(true);
+            }
         }
 
         StartHuntFX();
@@ -288,7 +327,10 @@ public class GhostPursuit : MonoBehaviour
 
         StopHuntFX();
 
-        if (forceVisibleDuringHunt && cachedModelRoot != null)
+        // stop visibility loop and restore original
+        if (huntVisibilityRoutine != null) { StopCoroutine(huntVisibilityRoutine); huntVisibilityRoutine = null; }
+
+        if (cachedModelRoot != null)
         {
             cachedModelRoot.gameObject.SetActive(cachedModelActive);
             cachedModelRoot = null;
@@ -301,8 +343,32 @@ public class GhostPursuit : MonoBehaviour
         nextHuntCheck = Time.time + huntCheckInterval;
     }
 
+    IEnumerator HuntVisibilityLoop()
+    {
+        // If modelRoot is missing, just exit
+        if (cachedModelRoot == null) yield break;
+
+        while (isHunting)
+        {
+            bool shouldShow = Random.value < huntVisibleChance;
+
+            if (shouldShow)
+            {
+                cachedModelRoot.gameObject.SetActive(true);
+                float t = Random.Range(huntVisibleDurationRange.x, huntVisibleDurationRange.y);
+                yield return new WaitForSeconds(Mathf.Max(0.01f, t));
+            }
+            else
+            {
+                cachedModelRoot.gameObject.SetActive(false);
+                float t = Random.Range(huntInvisibleDurationRange.x, huntInvisibleDurationRange.y);
+                yield return new WaitForSeconds(Mathf.Max(0.01f, t));
+            }
+        }
+    }
+
     // ------------------------
-    // Chase logic (CHASES THE PLAYER CYLINDER CHILD)
+    // Chase logic
     // ------------------------
     void ChasePlayer()
     {
@@ -335,7 +401,6 @@ public class GhostPursuit : MonoBehaviour
 
         Vector3 dest = target.position;
 
-        // If your cylinder is slightly above ground, sample navmesh around it
         if (NavMesh.SamplePosition(dest, out NavMeshHit hit2, 6f, NavMesh.AllAreas))
             agent.SetDestination(hit2.position);
         else
@@ -343,7 +408,7 @@ public class GhostPursuit : MonoBehaviour
     }
 
     // ------------------------
-    // Touch hit (hit the player cylinder layer)
+    // Touch hit (scream + stun)
     // ------------------------
     bool TryTouchHitPlayer()
     {
@@ -351,8 +416,12 @@ public class GhostPursuit : MonoBehaviour
         if (hits == null || hits.Length == 0) return false;
 
         Transform playerRootFromHit = hits[0].transform.root;
-        Sanity sanity = playerRootFromHit.GetComponentInChildren<Sanity>(true);
 
+        // Scream SFX
+        PlayTouchScream();
+
+        // Drain sanity
+        Sanity sanity = playerRootFromHit.GetComponentInChildren<Sanity>(true);
         if (sanity != null && sanity.enabled)
         {
             float dmg = GetTouchDrainByDifficulty();
@@ -364,10 +433,26 @@ public class GhostPursuit : MonoBehaviour
             Log("TOUCH -> but no enabled Sanity found.");
         }
 
+        // Stun overlay
+        if (stunOverlay == null)
+            stunOverlay = FindUIImageEvenIfDisabled(stunOverlayName);
+
         if (stunOverlay != null)
             StartCoroutine(StunOverlayRoutine());
+        else
+            Log($"TOUCH -> stunOverlay not found (looking for '{stunOverlayName}').");
 
         return true;
+    }
+
+    void PlayTouchScream()
+    {
+        if (huntAudioSource == null) return;
+        if (touchScreamClips == null || touchScreamClips.Length == 0) return;
+
+        AudioClip c = touchScreamClips[Random.Range(0, touchScreamClips.Length)];
+        huntAudioSource.PlayOneShot(c, touchScreamVolume);
+        Log($"TOUCH -> scream: {c.name}");
     }
 
     float GetTouchDrainByDifficulty()
@@ -385,6 +470,10 @@ public class GhostPursuit : MonoBehaviour
 
     IEnumerator StunOverlayRoutine()
     {
+        // If it was disabled in the canvas, enable it for the effect
+        if (!stunOverlay.gameObject.activeSelf)
+            stunOverlay.gameObject.SetActive(true);
+
         float inTime = Mathf.Max(0.05f, stunDuration * 0.25f);
         float holdTime = Mathf.Max(0.05f, stunDuration * 0.35f);
         float outTime = Mathf.Max(0.05f, stunDuration * 0.40f);
@@ -412,6 +501,9 @@ public class GhostPursuit : MonoBehaviour
         }
 
         stunOverlay.color = new Color(baseC.r, baseC.g, baseC.b, 0f);
+
+        // Turn it off again if you want it hidden by default
+        stunOverlay.gameObject.SetActive(false);
     }
 
     // ------------------------
@@ -489,7 +581,7 @@ public class GhostPursuit : MonoBehaviour
             if (huntAudioSource != null && gruntClips != null && gruntClips.Length > 0)
             {
                 var c = gruntClips[Random.Range(0, gruntClips.Length)];
-                huntAudioSource.PlayOneShot(c);
+                huntAudioSource.PlayOneShot(c, gruntVolumeScale);
             }
             yield return new WaitForSeconds(Random.Range(gruntIntervalRange.x, gruntIntervalRange.y));
         }
@@ -502,21 +594,21 @@ public class GhostPursuit : MonoBehaviour
             if (huntAudioSource != null && footstepClips != null && footstepClips.Length > 0)
             {
                 var c = footstepClips[Random.Range(0, footstepClips.Length)];
-                huntAudioSource.PlayOneShot(c);
+                huntAudioSource.PlayOneShot(c, footstepVolumeScale);
+
             }
             yield return new WaitForSeconds(Mathf.Max(0.05f, footstepInterval));
         }
     }
 
     // ------------------------
-    // Player finding: root + child collider target (the cylinder)
+    // Player finding
     // ------------------------
     void ResolvePlayerRootAndBodyTarget(bool force)
     {
         if (!force && playerRoot != null && (!chasePlayerColliderChild || playerBodyTarget != null))
             return;
 
-        // Find player root
         if (playerRoot == null)
         {
             GameObject p = GameObject.FindGameObjectWithTag(playerTag);
@@ -527,13 +619,11 @@ public class GhostPursuit : MonoBehaviour
         if (!chasePlayerColliderChild)
             return;
 
-        // Find the best collider transform on the playerLayer inside playerRoot
         if (playerRoot != null)
         {
             playerBodyTarget = FindFirstColliderOnLayer(playerRoot, playerLayer);
             if (playerBodyTarget == null)
             {
-                // fallback: any collider in children
                 Collider c = playerRoot.GetComponentInChildren<Collider>(true);
                 if (c != null) playerBodyTarget = c.transform;
             }
@@ -542,9 +632,6 @@ public class GhostPursuit : MonoBehaviour
 
     Transform FindFirstColliderOnLayer(Transform root, LayerMask mask)
     {
-        // Mask -> layer check helper:
-        // if ((mask.value & (1 << layer)) != 0) that layer is included
-
         Collider[] cols = root.GetComponentsInChildren<Collider>(true);
         for (int i = 0; i < cols.Length; i++)
         {
@@ -563,8 +650,22 @@ public class GhostPursuit : MonoBehaviour
 
         Light l = Camera.main.GetComponent<Light>();
         if (l == null) l = Camera.main.GetComponentInChildren<Light>(true);
-
         if (l != null) playerFlashlight = l;
+    }
+
+    // Finds UI image even if it's disabled in the scene
+    Image FindUIImageEvenIfDisabled(string exactName)
+    {
+        if (string.IsNullOrEmpty(exactName)) return null;
+
+        Image[] allImages = Resources.FindObjectsOfTypeAll<Image>();
+        for (int i = 0; i < allImages.Length; i++)
+        {
+            if (allImages[i] == null) continue;
+            if (allImages[i].name == exactName)
+                return allImages[i];
+        }
+        return null;
     }
 
     MonoBehaviour GetComponentByTypeName(string typeName)
@@ -584,5 +685,10 @@ public class GhostPursuit : MonoBehaviour
         if (!debugLogs) return;
         Debug.Log($"[GhostPursuit] {msg}", this);
     }
-}
 
+    void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.red;
+        Gizmos.DrawWireSphere(transform.position, touchRadius);
+    }
+}
