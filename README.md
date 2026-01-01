@@ -1,5 +1,5 @@
 # Spectrify
-A ghost hunting game.
+A multiplayer ghost hunting horror game by MINGO.
 
 Maps:
 The Abyss Asylum 
@@ -356,4 +356,3 @@ Average XP gain: 3500Xp
 Lvl30 -> Lvl31: 4000Xp
 Lvl31 -> Lvl32: 4050Xp
 Lvl32 -> Lvl33: 4100Xp
-
