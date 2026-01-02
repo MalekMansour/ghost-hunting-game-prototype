@@ -1,151 +1,145 @@
 using System.Collections;
 using UnityEngine;
-using UnityEngine.Rendering;
 
 public class Death : MonoBehaviour
 {
-    [Header("Death Timing")]
-    [Tooltip("How long to wait AFTER triggering the death animation before ragdoll starts.")]
-    public float ragdollDelay = 3f;
-
-    [Tooltip("How long to wait AFTER ragdoll starts before switching player into spectator mode.")]
-    public float spectatorDelayAfterRagdoll = 0.15f;
-
-    [Header("Model / Ragdoll")]
-    [Tooltip("Root transform of the PLAYER MODEL (skeleton/mesh). If empty, auto-uses Animator transform.")]
-    public Transform modelRoot;
-
+    [Header("Animation")]
     [Tooltip("Animator on the player model. If empty, auto-find in children.")]
     public Animator playerAnimator;
 
-    [Tooltip("If true, we disable the animator when ragdoll begins.")]
-    public bool disableAnimatorOnRagdoll = true;
+    [Tooltip("Trigger parameter name for death animation.")]
+    public string deathTriggerName = "Die";
 
-    [Header("Main Player Collision (living controller)")]
-    [Tooltip("Your player cylinder/capsule object (the collider you walk with). If empty, we try auto-find CharacterController root.")]
-    public Transform playerColliderRoot;
+    [Tooltip("Optionally turn on root motion during death so the animation can drop the body to the floor (IF the clip has root motion).")]
+    public bool enableRootMotionDuringDeath = true;
 
-    [Tooltip("Disable CharacterController on death so it doesn't fight ragdoll.")]
-    public bool disableCharacterControllerOnDeath = true;
+    [Tooltip("Wait this long before freezing the animation + switching to spectator.")]
+    public float deathWaitSeconds = 3f;
 
-    [Tooltip("Disable Rigidbody on the main player collider root (if you use one).")]
-    public bool disableMainRigidbodyOnDeath = false;
+    [Header("Death Sound")]
+    public AudioSource deathAudioSource;
+    public AudioClip deathClip;
+    [Range(0f, 5f)] public float deathVolume = 1f;
 
-    [Header("Camera")]
-    [Tooltip("Main player camera (if empty uses Camera.main).")]
-    public Camera mainCamera;
+    [Header("Disable These Scripts On Death (drag anything here)")]
+    [Tooltip("Put PlayerMovement, Footsteps, PlayerInventory, Interaction, Flashlight script, PlayerRaycaster, etc here.")]
+    public Behaviour[] scriptsToDisable;
 
-    [Header("Spectator")]
-    [Tooltip("Layer name spectator should be set to. Ghosts must NOT include this in their playerLayer mask.")]
+    [Header("Layer Switching")]
+    public string playerLayerName = "Player";
     public string spectatorLayerName = "Spectator";
 
-    [Tooltip("When spectator spawns, camera will parent to it.")]
-    public bool attachCameraToSpectator = true;
+    [Tooltip("Change the layer recursively on THIS whole player hierarchy.")]
+    public bool setWholeHierarchyToSpectatorLayer = true;
 
-    [Tooltip("Spectator capsule radius/height.")]
+    [Header("Camera / Spectator Controller")]
+    [Tooltip("Main camera. If empty, uses Camera.main.")]
+    public Camera mainCamera;
+
+    [Tooltip("Create an invisible spectator capsule with collisions.")]
+    public bool spawnSpectatorController = true;
+
+    [Tooltip("Spectator controller name (created at runtime).")]
+    public string spectatorObjectName = "SpectatorController";
+
+    [Tooltip("Height of spectator CharacterController.")]
+    public float spectatorHeight = 1.75f;
+
+    [Tooltip("Radius of spectator CharacterController.")]
     public float spectatorRadius = 0.35f;
-    public float spectatorHeight = 1.7f;
 
-    [Tooltip("Movement speed as spectator.")]
+    [Tooltip("Speed of spectator movement.")]
     public float spectatorMoveSpeed = 5.5f;
 
-    [Tooltip("Sprint multiplier.")]
+    [Tooltip("Sprint multiplier (Shift).")]
     public float spectatorSprintMultiplier = 1.6f;
 
-    [Tooltip("Gravity applied to spectator so it stays on floors and doesn't float.")]
+    [Tooltip("Gravity for spectator so you stay grounded.")]
     public float spectatorGravity = 18f;
 
     [Tooltip("Mouse sensitivity for spectator look.")]
     public float spectatorMouseSensitivity = 2.0f;
 
-    [Header("Disable Gameplay On Death")]
-    [Tooltip("Scripts to disable when dead (Interact, Pickup, Mic input, etc).")]
-    public Behaviour[] disableOnDeath;
+    [Tooltip("Keep camera at same WORLD position/rotation when switching.")]
+    public bool keepCameraWorldTransform = true;
 
-    [Tooltip("Disable PlayerInventory after dropping items.")]
-    public bool disableInventoryAfterDrop = true;
-
-    [Tooltip("Disable Sanity components.")]
-    public bool disableSanity = true;
-
-    [Header("Flashlight")]
-    [Tooltip("If you use a Light on the camera as flashlight, we'll disable it on death.")]
-    public Light flashlightLight;
-
-    [Header("Post Processing")]
-    [Tooltip("Spectator post process Volume object name in the scene.")]
-    public string spectatorPostProcessingName = "SpectatorPostProcessing";
-
-    [Tooltip("Optional gameplay volume to disable on death.")]
-    public Volume gameplayVolumeToDisable;
+    [Tooltip("When parenting camera to spectator, keep the camera WORLD Y exactly the same (prevents camera dropping).")]
+    public bool keepCameraWorldY = true;
 
     [Header("Debug")]
     public bool debugLogs = false;
 
-    private bool isDead = false;
+    private bool deadStarted = false;
     private GameObject spectatorGO;
+    private bool cachedApplyRootMotion;
+    private float cachedAnimatorSpeed;
 
-    // -------------------------
-    // PUBLIC ENTRY POINT (Sanity calls this)
-    // -------------------------
     public void BeginDeath()
     {
-        if (isDead) return;
-        isDead = true;
+        if (deadStarted) return;
+        deadStarted = true;
+
         StartCoroutine(DeathRoutine());
     }
 
-    IEnumerator DeathRoutine()
+    private IEnumerator DeathRoutine()
     {
         ResolveRefs();
 
-        // 1) Drop all inventory
-        PlayerInventory inv = GetComponentInChildren<PlayerInventory>(true);
-        if (inv != null)
+        // 1) Trigger death animation
+        if (playerAnimator != null)
         {
-            inv.DropAllItems();
-            if (disableInventoryAfterDrop)
-                inv.enabled = false;
+            cachedApplyRootMotion = playerAnimator.applyRootMotion;
+            cachedAnimatorSpeed = playerAnimator.speed;
+
+            if (enableRootMotionDuringDeath)
+                playerAnimator.applyRootMotion = true;
+
+            if (!string.IsNullOrEmpty(deathTriggerName))
+            {
+                playerAnimator.ResetTrigger(deathTriggerName);
+                playerAnimator.SetTrigger(deathTriggerName);
+            }
+        }
+        else
+        {
+            Log("No Animator found.");
         }
 
-        // 2) Disable requested scripts (interaction/mic/etc)
-        if (disableOnDeath != null)
+        // 2) Play death sound
+        if (deathAudioSource != null && deathClip != null)
         {
-            for (int i = 0; i < disableOnDeath.Length; i++)
-                if (disableOnDeath[i] != null) disableOnDeath[i].enabled = false;
+            // Keep it local (multiplayer-safe later). You can make it 3D on a separate world AudioSource if needed.
+            deathAudioSource.spatialBlend = 0f;
+            deathAudioSource.PlayOneShot(deathClip, Mathf.Clamp(deathVolume, 0f, 5f));
+        }
+        else
+        {
+            Log("Death sound skipped (missing AudioSource or clip).");
         }
 
-        // 3) Disable sanity
-        if (disableSanity)
-            DisableSanityComponents();
+        // 3) Wait 3 seconds
+        yield return new WaitForSeconds(Mathf.Max(0f, deathWaitSeconds));
 
-        // 4) Turn off flashlight
-        if (flashlightLight == null && mainCamera != null)
-            flashlightLight = mainCamera.GetComponentInChildren<Light>(true);
+        // 4) Freeze the animation on its last frame
+        FreezeAnimatorOnLastFrame();
 
-        if (flashlightLight != null)
-            flashlightLight.enabled = false;
+        // 5) Disable scripts (you decide in inspector)
+        DisableScripts();
 
-        // 5) Wait for death animation to play
-        Log($"Waiting {ragdollDelay:0.00}s then ragdoll...");
-        yield return new WaitForSeconds(Mathf.Max(0f, ragdollDelay));
+        // 6) Swap layer to Spectator (so ghosts ignore you)
+        ApplySpectatorLayer();
 
-        // 6) Enable ragdoll on model
-        EnableRagdoll();
+        // 7) Camera: detach + spectator movement with collisions
+        if (spawnSpectatorController)
+            CreateSpectatorControllerAndAttachCamera();
+        else
+            DetachCameraOnly();
 
-        // 7) Small delay then spectator swap
-        yield return new WaitForSeconds(Mathf.Max(0f, spectatorDelayAfterRagdoll));
-
-        ApplySpectatorPostProcessing();
-        SpawnSpectatorAndMoveCamera();
-
-        Log("Death -> ragdoll + spectator done.");
+        Log("Death complete -> spectator active.");
     }
 
-    // -------------------------
-    // Resolve refs safely
-    // -------------------------
-    void ResolveRefs()
+    private void ResolveRefs()
     {
         if (mainCamera == null && Camera.main != null)
             mainCamera = Camera.main;
@@ -153,96 +147,112 @@ public class Death : MonoBehaviour
         if (playerAnimator == null)
             playerAnimator = GetComponentInChildren<Animator>(true);
 
-        if (modelRoot == null && playerAnimator != null)
-            modelRoot = playerAnimator.transform;
-
-        // Try to find player collider root (your cylinder) if not assigned
-        if (playerColliderRoot == null)
-        {
-            CharacterController cc = GetComponentInChildren<CharacterController>(true);
-            if (cc != null) playerColliderRoot = cc.transform;
-        }
+        if (deathAudioSource == null)
+            deathAudioSource = GetComponentInChildren<AudioSource>(true);
     }
 
-    // -------------------------
-    // Ragdoll handling
-    // -------------------------
-    void EnableRagdoll()
+    private void FreezeAnimatorOnLastFrame()
     {
-        if (modelRoot == null)
+        if (playerAnimator == null) return;
+
+        // Force the current state to its end and freeze.
+        // NOTE: This assumes the state is on layer 0 and the death clip is the active state after 3 seconds.
+        // If your controller uses a different layer, tell me and I’ll adapt.
+        playerAnimator.Update(0f); // ensure fresh state info
+        AnimatorStateInfo st = playerAnimator.GetCurrentAnimatorStateInfo(0);
+
+        // Snap to end of current state and freeze there
+        playerAnimator.Play(st.shortNameHash, 0, 1f);
+        playerAnimator.Update(0f);
+
+        playerAnimator.speed = 0f;
+
+        // Keep root motion setting as-is (we want the body where it ended up)
+        Log("Animator frozen on last frame.");
+    }
+
+    private void DisableScripts()
+    {
+        if (scriptsToDisable == null) return;
+
+        for (int i = 0; i < scriptsToDisable.Length; i++)
         {
-            Log("EnableRagdoll: modelRoot is null (skipped).");
+            if (scriptsToDisable[i] == null) continue;
+            scriptsToDisable[i].enabled = false;
+        }
+
+        Log("Disabled scripts from inspector list.");
+    }
+
+    private void ApplySpectatorLayer()
+    {
+        int specLayer = LayerMask.NameToLayer(spectatorLayerName);
+        if (specLayer == -1)
+        {
+            Log($"Spectator layer '{spectatorLayerName}' not found. Create it in Project Settings > Tags and Layers.");
             return;
         }
 
-        if (disableAnimatorOnRagdoll && playerAnimator != null)
-            playerAnimator.enabled = false;
-
-        // Disable main player controller collider so it doesn't fight physics
-        if (playerColliderRoot != null)
+        if (!setWholeHierarchyToSpectatorLayer)
         {
-            if (disableCharacterControllerOnDeath)
-            {
-                CharacterController cc = playerColliderRoot.GetComponent<CharacterController>();
-                if (cc != null) cc.enabled = false;
-            }
-
-            if (disableMainRigidbodyOnDeath)
-            {
-                Rigidbody rb = playerColliderRoot.GetComponent<Rigidbody>();
-                if (rb != null) rb.isKinematic = true;
-            }
-        }
-
-        // Enable ragdoll rigidbodies
-        Rigidbody[] rbs = modelRoot.GetComponentsInChildren<Rigidbody>(true);
-        Collider[] cols = modelRoot.GetComponentsInChildren<Collider>(true);
-
-        // Turn on colliders (ragdoll bones)
-        for (int i = 0; i < cols.Length; i++)
-        {
-            if (cols[i] == null) continue;
-            // Don't mess with trigger colliders if you have them
-            cols[i].enabled = true;
-        }
-
-        // Make ragdoll bodies physical
-        for (int i = 0; i < rbs.Length; i++)
-        {
-            if (rbs[i] == null) continue;
-            rbs[i].isKinematic = false;
-            rbs[i].useGravity = true;
-        }
-
-        Log("Ragdoll enabled.");
-    }
-
-    // -------------------------
-    // Spectator with collisions (NO BODY)
-    // -------------------------
-    void SpawnSpectatorAndMoveCamera()
-    {
-        if (mainCamera == null)
-        {
-            Log("SpawnSpectator: no mainCamera.");
+            gameObject.layer = specLayer;
             return;
         }
 
-        // Make spectator capsule (invisible)
-        spectatorGO = new GameObject("SpectatorController");
-        spectatorGO.transform.position = mainCamera.transform.position;
-        spectatorGO.transform.rotation = Quaternion.Euler(0f, mainCamera.transform.eulerAngles.y, 0f);
+        SetLayerRecursively(transform, specLayer);
+        Log("Set player hierarchy to Spectator layer.");
+    }
 
-        int spectatorLayer = LayerMask.NameToLayer(spectatorLayerName);
-        if (spectatorLayer != -1)
-            spectatorGO.layer = spectatorLayer;
+    private void SetLayerRecursively(Transform root, int layer)
+    {
+        root.gameObject.layer = layer;
+        for (int i = 0; i < root.childCount; i++)
+            SetLayerRecursively(root.GetChild(i), layer);
+    }
+
+    private void DetachCameraOnly()
+    {
+        if (mainCamera == null) return;
+        Transform camT = mainCamera.transform;
+
+        // Detach, keep world transform
+        if (keepCameraWorldTransform)
+        {
+            Vector3 wp = camT.position;
+            Quaternion wr = camT.rotation;
+            camT.SetParent(null, true);
+            camT.position = wp;
+            camT.rotation = wr;
+        }
         else
-            Log($"Spectator layer '{spectatorLayerName}' not found. Create it in Unity > Layers.");
+        {
+            camT.SetParent(null, true);
+        }
+    }
 
-        // Add CharacterController so you collide with floors/walls
+    private void CreateSpectatorControllerAndAttachCamera()
+    {
+        if (mainCamera == null) return;
+
+        Transform camT = mainCamera.transform;
+
+        Vector3 camWorldPos = camT.position;
+        Quaternion camWorldRot = camT.rotation;
+
+        // Create spectator object
+        spectatorGO = new GameObject(spectatorObjectName);
+
+        int specLayer = LayerMask.NameToLayer(spectatorLayerName);
+        if (specLayer != -1) spectatorGO.layer = specLayer;
+
+        // Spawn at camera position (so you don't teleport weirdly)
+        spectatorGO.transform.position = camWorldPos;
+        spectatorGO.transform.rotation = Quaternion.Euler(0f, camWorldRot.eulerAngles.y, 0f);
+
+        // Add collisions
         CharacterController cc = spectatorGO.AddComponent<CharacterController>();
-        cc.radius = spectatorRadius;
         cc.height = spectatorHeight;
+        cc.radius = spectatorRadius;
         cc.center = new Vector3(0f, spectatorHeight * 0.5f, 0f);
         cc.stepOffset = 0.35f;
         cc.minMoveDistance = 0f;
@@ -255,111 +265,37 @@ public class Death : MonoBehaviour
         motor.gravity = spectatorGravity;
         motor.mouseSensitivity = spectatorMouseSensitivity;
 
-        // Detach camera from player/model and attach to spectator
-        if (attachCameraToSpectator)
+        // Parent camera to spectator BUT keep its world pos (and Y if desired)
+        Vector3 targetWorldPos = camWorldPos;
+        if (keepCameraWorldY)
         {
-            Transform camT = mainCamera.transform;
-
-            // Ensure camera doesn't have gravity physics messing it up
-            Rigidbody camRb = camT.GetComponent<Rigidbody>();
-            if (camRb != null)
-            {
-                camRb.useGravity = false;
-                camRb.isKinematic = true;
-            }
-
-            camT.SetParent(spectatorGO.transform, true);
-
-            // Keep camera at head-ish height relative to capsule
-            camT.localPosition = new Vector3(0f, spectatorHeight * 0.88f, 0f);
+            // Keep the SAME Y you already had
+            targetWorldPos.y = camWorldPos.y;
         }
 
-        // Hide the living "player view body" if you have any renderers still around for the local player
-        // We DO NOT destroy the ragdoll (corpse should remain)
-        HideLocalFirstPersonBodyRenderers();
+        // Detach first
+        camT.SetParent(null, true);
+        camT.position = camWorldPos;
+        camT.rotation = camWorldRot;
 
-        Log("Spectator spawned with collisions.");
+        // Parent now
+        camT.SetParent(spectatorGO.transform, true);
+
+        // Restore world transform exactly (prevents camera "dropping" due to local pos changes)
+        camT.position = targetWorldPos;
+        camT.rotation = camWorldRot;
+
+        Log("Spectator controller created + camera attached (collision safe).");
     }
 
-    void HideLocalFirstPersonBodyRenderers()
-    {
-        // This prevents you from “having a body” as spectator.
-        // Corpse ragdoll is still visible because it’s separate physical bones/renderers on modelRoot.
-        // If your modelRoot renderers are the corpse you WANT visible, do NOT disable them.
-
-        // If you have a separate first-person arms/body object, add it to disableOnDeath instead.
-        // Here we ONLY try to disable any Renderer directly under the PLAYER ROOT excluding modelRoot.
-        Renderer[] rends = GetComponentsInChildren<Renderer>(true);
-        for (int i = 0; i < rends.Length; i++)
-        {
-            if (rends[i] == null) continue;
-
-            // Don't hide the corpse mesh (modelRoot)
-            if (modelRoot != null && rends[i].transform.IsChildOf(modelRoot)) continue;
-
-            rends[i].enabled = false;
-        }
-    }
-
-    // -------------------------
-    // Sanity disabling
-    // -------------------------
-    void DisableSanityComponents()
-    {
-        MonoBehaviour[] monos = GetComponentsInChildren<MonoBehaviour>(true);
-        for (int i = 0; i < monos.Length; i++)
-        {
-            if (monos[i] == null) continue;
-            if (monos[i].GetType().Name == "Sanity")
-                monos[i].enabled = false;
-        }
-    }
-
-    // -------------------------
-    // Post processing
-    // -------------------------
-    void ApplySpectatorPostProcessing()
-    {
-        if (gameplayVolumeToDisable != null)
-            gameplayVolumeToDisable.enabled = false;
-
-        Volume spectatorVol = FindVolumeByName(spectatorPostProcessingName);
-        if (spectatorVol != null)
-        {
-            spectatorVol.enabled = true;
-            spectatorVol.weight = 1f;
-            Log($"Enabled spectator post processing: {spectatorVol.name}");
-        }
-        else
-        {
-            Log($"Could not find Volume named '{spectatorPostProcessingName}'.");
-        }
-    }
-
-    Volume FindVolumeByName(string exactName)
-    {
-        if (string.IsNullOrEmpty(exactName)) return null;
-
-        Volume[] vols = Resources.FindObjectsOfTypeAll<Volume>();
-        for (int i = 0; i < vols.Length; i++)
-        {
-            if (vols[i] == null) continue;
-            if (vols[i].name == exactName)
-                return vols[i];
-        }
-        return null;
-    }
-
-    void Log(string msg)
+    private void Log(string msg)
     {
         if (!debugLogs) return;
         Debug.Log("[Death] " + msg, this);
     }
 }
 
-// ----------------------------------------------------
-// Spectator motor: collision + gravity (won’t fall through map)
-// ----------------------------------------------------
+// ---- Simple spectator movement with collisions ----
 public class SpectatorMotor : MonoBehaviour
 {
     [HideInInspector] public CharacterController cc;
@@ -392,15 +328,12 @@ public class SpectatorMotor : MonoBehaviour
 
         transform.rotation = Quaternion.Euler(0f, yaw, 0f);
 
-        // Camera pitch is handled by the camera itself (it’s parented).
         Camera cam = GetComponentInChildren<Camera>();
         if (cam != null)
             cam.transform.localRotation = Quaternion.Euler(pitch, 0f, 0f);
 
-        // Movement
-        float speed = moveSpeed;
-        if (Input.GetKey(KeyCode.LeftShift))
-            speed *= sprintMultiplier;
+        // Move
+        float speed = moveSpeed * (Input.GetKey(KeyCode.LeftShift) ? sprintMultiplier : 1f);
 
         Vector3 move = Vector3.zero;
         if (Input.GetKey(KeyCode.W)) move += transform.forward;
@@ -410,15 +343,15 @@ public class SpectatorMotor : MonoBehaviour
 
         if (move.sqrMagnitude > 1f) move.Normalize();
 
-        // Gravity (keeps you grounded; prevents “falling through” by uncontrolled physics)
+        // Gravity
         if (cc.isGrounded && verticalVelocity < 0f)
             verticalVelocity = -2f;
         else
             verticalVelocity -= gravity * Time.deltaTime;
 
-        Vector3 final = move * speed;
-        final.y = verticalVelocity;
+        Vector3 vel = move * speed;
+        vel.y = verticalVelocity;
 
-        cc.Move(final * Time.deltaTime);
+        cc.Move(vel * Time.deltaTime);
     }
 }
