@@ -3,6 +3,11 @@ using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.UI;
 
+#if UNITY_RENDER_PIPELINE_UNIVERSAL || UNITY_RENDER_PIPELINE_HIGH_DEFINITION
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
+#endif
+
 [RequireComponent(typeof(GhostMovement))]
 public class GhostPursuit : MonoBehaviour
 {
@@ -47,6 +52,19 @@ public class GhostPursuit : MonoBehaviour
     public float repathInterval = 0.12f;
     public float farDistance = 12f;
     [Range(0.4f, 1f)] public float farSpeedMultiplier = 0.85f;
+
+    [Header("Turning (NavMeshAgent)")]
+    [Tooltip("How fast the ghost turns during hunts.")]
+    public float huntAngularSpeed = 720f;
+
+    [Tooltip("How quickly it accelerates during hunts (snappier turns).")]
+    public float huntAcceleration = 40f;
+
+    [Tooltip("Restore values after hunt (if 0, we restore whatever it had at start).")]
+    public float roamAngularSpeed = 0f;
+
+    [Tooltip("Restore values after hunt (if 0, we restore whatever it had at start).")]
+    public float roamAcceleration = 0f;
 
     [Header("Touch / Damage")]
     public float touchRadius = 1.0f;
@@ -99,21 +117,49 @@ public class GhostPursuit : MonoBehaviour
     [Range(0f, 10f)] public float footstepVolumeScale = 1.0f;
     [Range(0f, 10f)] public float screamVolumeScale = 3.5f;
 
-    // ------------------------
-    // NEW: Attack animation settings
-    // ------------------------
     [Header("Attack Animation (On Touch)")]
-    [Tooltip("Animator trigger name to fire when the ghost hits the player during a hunt.")]
     public string attackTriggerName = "Attack";
-
-    [Tooltip("How long to wait before ending the hunt after touching the player (so the attack animation is visible).")]
     public float endHuntDelayAfterTouch = 0.35f;
-
-    [Tooltip("If true, we temporarily force the model visible at the moment of attack.")]
     public bool forceVisibleOnTouch = true;
-
-    [Tooltip("How long we force visibility after touching the player.")]
     public float forceVisibleDuration = 0.5f;
+
+    // ------------------------
+    // Attack hit feedback (ringing + muffled + postFX)
+    // ------------------------
+    [Header("Attack Hit Feedback (Local Player Only)")]
+    [Tooltip("A ringing/tinnitus clip played on the HIT PLAYER (not globally).")]
+    public AudioClip tinnitusClip;
+
+    [Tooltip("Volume for tinnitus clip.")]
+    [Range(0f, 2f)] public float tinnitusVolume = 1f;
+
+    [Tooltip("If true, we temporarily add/adjust a LowPassFilter on the hit player to simulate muffled hearing.")]
+    public bool enableMuffleOnHit = true;
+
+    [Tooltip("Low-pass cutoff while stunned (lower = more muffled).")]
+    public float muffleCutoff = 800f;
+
+    [Tooltip("How long the muffling lasts (defaults to stunDuration if <= 0).")]
+    public float muffleDuration = 0f;
+
+    // ------------------------
+    // NEW: Post Processing toggle (DOF + Chromatic) on touch
+    // ------------------------
+    [Header("Post Processing On Hit (Depth Of Field + Chromatic)")]
+    [Tooltip("Name of your post processing GameObject under the player (Volume). Example: 'PostProcessing'. If not found, we fall back to any Volume on player/camera.")]
+    public string postProcessObjectName = "PostProcessing";
+
+    [Tooltip("How long to keep DOF/Chromatic enabled after getting hit.")]
+    public float postFXDuration = 4f;
+
+    [Tooltip("Enable Depth Of Field on hit.")]
+    public bool enableDepthOfFieldOnHit = true;
+
+    [Tooltip("Enable Chromatic Aberration on hit.")]
+    public bool enableChromaticOnHit = true;
+
+    [Tooltip("Chromatic intensity during hit (0..1). Only used if the override exists in the Volume profile.")]
+    [Range(0f, 1f)] public float chromaticHitIntensity = 0.8f;
 
     [Header("Debug")]
     public bool debugLogs = false;
@@ -151,8 +197,23 @@ public class GhostPursuit : MonoBehaviour
     private Transform cachedModelRoot;
     private Coroutine huntVisibilityRoutine;
 
-    // NEW: prevent double-ending / multiple touches
+    // prevent double-ending / multiple touches
     private bool endingFromTouch = false;
+
+    // cache agent values to restore
+    private float cachedAngularSpeed;
+    private float cachedAcceleration;
+
+    // NEW: postFX coroutine handle so multiple hits don't stack weird
+    private Coroutine postFXRoutine;
+
+#if UNITY_RENDER_PIPELINE_UNIVERSAL || UNITY_RENDER_PIPELINE_HIGH_DEFINITION
+    private DepthOfField cachedDOF;
+    private ChromaticAberration cachedChrom;
+    private bool cachedDOFActive;
+    private bool cachedChromActive;
+    private float cachedChromIntensity;
+#endif
 
     private const string DifficultyPrefKey = "SelectedDifficulty"; // 0 casual,1 standard,2 pro,3 lethal
 
@@ -169,9 +230,14 @@ public class GhostPursuit : MonoBehaviour
 
         CacheFlashlightFromMainCamera();
 
-        // Auto-find the stunned image if user didn't assign it
         if (stunOverlay == null)
             stunOverlay = FindUIImageEvenIfDisabled(stunOverlayName);
+
+        if (agent != null)
+        {
+            cachedAngularSpeed = agent.angularSpeed;
+            cachedAcceleration = agent.acceleration;
+        }
     }
 
     void Start()
@@ -182,7 +248,6 @@ public class GhostPursuit : MonoBehaviour
 
     void Update()
     {
-        // Keep refreshing player body target (the cylinder)
         if (Time.time >= nextPlayerTargetRefresh)
         {
             nextPlayerTargetRefresh = Time.time + Mathf.Max(0.1f, playerTargetRefreshInterval);
@@ -217,7 +282,6 @@ public class GhostPursuit : MonoBehaviour
             {
                 nextTouchTime = Time.time + touchCooldown;
 
-                // IMPORTANT: do NOT end hunt immediately; let attack animation play.
                 endingFromTouch = true;
                 StartCoroutine(EndHuntAfterAttack(endHuntDelayAfterTouch));
                 return;
@@ -225,9 +289,6 @@ public class GhostPursuit : MonoBehaviour
         }
     }
 
-    // ------------------------
-    // Start hunt decision
-    // ------------------------
     void TryStartHunt()
     {
         ResolvePlayerRootAndBodyTarget(force: true);
@@ -281,9 +342,6 @@ public class GhostPursuit : MonoBehaviour
         return best;
     }
 
-    // ------------------------
-    // Hunt start / end
-    // ------------------------
     void StartHunt()
     {
         if (isHunting) return;
@@ -297,27 +355,29 @@ public class GhostPursuit : MonoBehaviour
 
         Log($"HUNT START dur={dur:0.0}s target={(playerBodyTarget ? playerBodyTarget.name : (playerRoot ? playerRoot.name : "NONE"))}");
 
-        // Disable competing scripts
         if (movement) movement.enabled = false;
         if (echoeBrain) echoeBrain.enabled = false;
         if (ghostEvent) ghostEvent.enabled = false;
 
-        // Take over agent
         if (agent != null)
         {
             agent.enabled = true;
             agent.isStopped = false;
             agent.updateRotation = true;
             agent.autoBraking = false;
+
+            cachedAngularSpeed = agent.angularSpeed;
+            cachedAcceleration = agent.acceleration;
+
+            agent.angularSpeed = Mathf.Max(30f, huntAngularSpeed);
+            agent.acceleration = Mathf.Max(1f, huntAcceleration);
         }
 
-        // Cache modelRoot and initial active state
         if (movement != null && movement.modelRoot != null)
         {
             cachedModelRoot = movement.modelRoot;
             cachedModelActive = cachedModelRoot.gameObject.activeSelf;
 
-            // Start hunt visibility routine
             if (controlVisibilityDuringHunt)
             {
                 if (huntVisibilityRoutine != null) StopCoroutine(huntVisibilityRoutine);
@@ -325,7 +385,6 @@ public class GhostPursuit : MonoBehaviour
             }
             else
             {
-                // fallback: always on during hunt
                 cachedModelRoot.gameObject.SetActive(true);
             }
         }
@@ -347,11 +406,13 @@ public class GhostPursuit : MonoBehaviour
         {
             agent.ResetPath();
             agent.isStopped = true;
+
+            agent.angularSpeed = (roamAngularSpeed > 0f) ? roamAngularSpeed : cachedAngularSpeed;
+            agent.acceleration = (roamAcceleration > 0f) ? roamAcceleration : cachedAcceleration;
         }
 
         StopHuntFX();
 
-        // stop visibility loop and restore original
         if (huntVisibilityRoutine != null) { StopCoroutine(huntVisibilityRoutine); huntVisibilityRoutine = null; }
 
         if (cachedModelRoot != null)
@@ -378,7 +439,6 @@ public class GhostPursuit : MonoBehaviour
 
     IEnumerator HuntVisibilityLoop()
     {
-        // If modelRoot is missing, just exit
         if (cachedModelRoot == null) yield break;
 
         while (isHunting)
@@ -409,14 +469,10 @@ public class GhostPursuit : MonoBehaviour
 
         yield return new WaitForSeconds(Mathf.Max(0f, seconds));
 
-        // Only restore if we're still hunting and still using visibility control
         if (isHunting && controlVisibilityDuringHunt)
             cachedModelRoot.gameObject.SetActive(prev);
     }
 
-    // ------------------------
-    // Chase logic
-    // ------------------------
     void ChasePlayer()
     {
         if (agent == null) return;
@@ -454,12 +510,8 @@ public class GhostPursuit : MonoBehaviour
             agent.SetDestination(dest);
     }
 
-    // ------------------------
-    // Touch hit (attack anim + scream + stun)
-    // ------------------------
     bool TryTouchHitPlayer()
     {
-        // Only do touch logic DURING a hunt
         if (!isHunting) return false;
 
         Collider[] hits = Physics.OverlapSphere(transform.position, touchRadius, playerLayer, QueryTriggerInteraction.Ignore);
@@ -467,19 +519,16 @@ public class GhostPursuit : MonoBehaviour
 
         Transform playerRootFromHit = hits[0].transform.root;
 
-        // NEW: Trigger attack animation on touch
         TriggerAttackAnimation();
 
-        // Optionally force visibility so you SEE the attack
         if (forceVisibleOnTouch && cachedModelRoot != null)
-        {
             StartCoroutine(ForceVisibleForSeconds(forceVisibleDuration));
-        }
 
-        // Scream SFX
         PlayTouchScream();
 
-        // Drain sanity
+        // Local hit feedback (tinnitus + muffle + POSTFX)
+        ApplyHitFeedbackToPlayer(playerRootFromHit);
+
         Sanity sanity = playerRootFromHit.GetComponentInChildren<Sanity>(true);
         if (sanity != null && sanity.enabled)
         {
@@ -492,7 +541,6 @@ public class GhostPursuit : MonoBehaviour
             Log("TOUCH -> but no enabled Sanity found.");
         }
 
-        // Stun overlay
         if (stunOverlay == null)
             stunOverlay = FindUIImageEvenIfDisabled(stunOverlayName);
 
@@ -504,18 +552,142 @@ public class GhostPursuit : MonoBehaviour
         return true;
     }
 
-    void TriggerAttackAnimation()
+    void ApplyHitFeedbackToPlayer(Transform playerRootFromHit)
     {
-        // Prefer GhostAnimatorDriver if you use it
-        var driver = GetComponentInChildren<GhostAnimatorDriver>(true);
-        if (driver != null)
+        // 1) tinnitus/ringing on player's audio source (multiplayer-safe)
+        if (tinnitusClip != null)
         {
-            driver.TriggerAttack();
-            Log("TOUCH -> Attack triggered via GhostAnimatorDriver.");
-            return;
+            AudioSource playerAS = playerRootFromHit.GetComponentInChildren<AudioSource>(true);
+            if (playerAS != null)
+            {
+                playerAS.PlayOneShot(tinnitusClip, Mathf.Clamp(tinnitusVolume, 0f, 2f));
+                Log($"HIT FX -> tinnitus played on {playerAS.name}");
+            }
+            else
+            {
+                Log("HIT FX -> no AudioSource found on player to play tinnitus.");
+            }
         }
 
-        // Fallback: direct Animator trigger
+        float durMuffle = (muffleDuration > 0f) ? muffleDuration : stunDuration;
+
+        // 2) muffled audio via LowPass on the player
+        if (enableMuffleOnHit)
+        {
+            AudioLowPassFilter lp = playerRootFromHit.GetComponentInChildren<AudioLowPassFilter>(true);
+            if (lp == null) lp = playerRootFromHit.gameObject.AddComponent<AudioLowPassFilter>();
+
+            StartCoroutine(MuffleRoutine(lp, durMuffle));
+        }
+
+        // 3) NEW: DOF + Chromatic toggle for 4 seconds
+        if (postFXRoutine != null) StopCoroutine(postFXRoutine);
+        postFXRoutine = StartCoroutine(PostFXRoutine(playerRootFromHit, Mathf.Max(0.1f, postFXDuration)));
+    }
+
+    IEnumerator MuffleRoutine(AudioLowPassFilter lp, float duration)
+    {
+        if (lp == null) yield break;
+
+        lp.enabled = true;
+        float prevCutoff = lp.cutoffFrequency;
+        lp.cutoffFrequency = Mathf.Clamp(muffleCutoff, 10f, 22000f);
+
+        yield return new WaitForSeconds(Mathf.Max(0.05f, duration));
+
+        lp.cutoffFrequency = prevCutoff;
+        lp.enabled = false;
+    }
+
+    IEnumerator PostFXRoutine(Transform playerRootFromHit, float duration)
+    {
+#if UNITY_RENDER_PIPELINE_UNIVERSAL || UNITY_RENDER_PIPELINE_HIGH_DEFINITION
+        // Find a Volume:
+        // 1) named object under player
+        // 2) any Volume under player
+        // 3) any Volume under main camera
+        Volume v = null;
+
+        if (!string.IsNullOrEmpty(postProcessObjectName))
+        {
+            Transform t = FindChildByName(playerRootFromHit, postProcessObjectName);
+            if (t != null) v = t.GetComponentInChildren<Volume>(true);
+        }
+
+        if (v == null) v = playerRootFromHit.GetComponentInChildren<Volume>(true);
+        if (v == null && Camera.main != null) v = Camera.main.GetComponentInChildren<Volume>(true);
+
+        if (v == null || v.profile == null)
+        {
+            Log("POSTFX -> No Volume/profile found (make sure you have a Volume on PostProcessing).");
+            yield break;
+        }
+
+        // Grab overrides
+        DepthOfField dof = null;
+        ChromaticAberration chrom = null;
+
+        bool hasDOF = v.profile.TryGet(out dof);
+        bool hasChrom = v.profile.TryGet(out chrom);
+
+        if (enableDepthOfFieldOnHit && !hasDOF)
+            Log("POSTFX -> DepthOfField override missing in Volume profile (add it).");
+
+        if (enableChromaticOnHit && !hasChrom)
+            Log("POSTFX -> ChromaticAberration override missing in Volume profile (add it).");
+
+        // Cache current values (only once per hit)
+        if (enableDepthOfFieldOnHit && hasDOF)
+        {
+            cachedDOF = dof;
+            cachedDOFActive = dof.active;
+            dof.active = true;
+        }
+
+        if (enableChromaticOnHit && hasChrom)
+        {
+            cachedChrom = chrom;
+            cachedChromActive = chrom.active;
+
+            cachedChromIntensity = chrom.intensity.value;
+
+            chrom.active = true;
+            chrom.intensity.Override(chromaticHitIntensity);
+        }
+
+        yield return new WaitForSeconds(duration);
+
+        // Restore
+        if (enableDepthOfFieldOnHit && cachedDOF != null)
+            cachedDOF.active = cachedDOFActive;
+
+        if (enableChromaticOnHit && cachedChrom != null)
+        {
+            cachedChrom.active = cachedChromActive;
+            cachedChrom.intensity.Override(cachedChromIntensity);
+        }
+#else
+        Log("POSTFX -> Not using URP/HDRP Volume compile symbols. (No postFX toggling.)");
+        yield return null;
+#endif
+    }
+
+#if UNITY_RENDER_PIPELINE_UNIVERSAL || UNITY_RENDER_PIPELINE_HIGH_DEFINITION
+    Transform FindChildByName(Transform root, string exactName)
+    {
+        if (root == null) return null;
+        Transform[] all = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (all[i] != null && all[i].name == exactName)
+                return all[i];
+        }
+        return null;
+    }
+#endif
+
+    void TriggerAttackAnimation()
+    {
         Animator anim = GetComponentInChildren<Animator>(true);
         if (anim != null && !string.IsNullOrEmpty(attackTriggerName))
         {
@@ -524,7 +696,7 @@ public class GhostPursuit : MonoBehaviour
         }
         else
         {
-            Log("TOUCH -> No GhostAnimatorDriver/Animator found to trigger Attack.");
+            Log("TOUCH -> No Animator found to trigger Attack.");
         }
     }
 
@@ -534,7 +706,6 @@ public class GhostPursuit : MonoBehaviour
         if (touchScreamClips == null || touchScreamClips.Length == 0) return;
 
         AudioClip c = touchScreamClips[Random.Range(0, touchScreamClips.Length)];
-        // Use your per-sfx scale (3D-safe) and keep the existing touchScreamVolume as a base
         float finalVol = Mathf.Clamp(touchScreamVolume * screamVolumeScale, 0f, 10f);
         huntAudioSource.PlayOneShot(c, finalVol);
         Log($"TOUCH -> scream: {c.name} vol={finalVol:0.00}");
@@ -555,7 +726,8 @@ public class GhostPursuit : MonoBehaviour
 
     IEnumerator StunOverlayRoutine()
     {
-        // If it was disabled in the canvas, enable it for the effect
+        if (stunOverlay == null) yield break;
+
         if (!stunOverlay.gameObject.activeSelf)
             stunOverlay.gameObject.SetActive(true);
 
@@ -586,14 +758,9 @@ public class GhostPursuit : MonoBehaviour
         }
 
         stunOverlay.color = new Color(baseC.r, baseC.g, baseC.b, 0f);
-
-        // Turn it off again if you want it hidden by default
         stunOverlay.gameObject.SetActive(false);
     }
 
-    // ------------------------
-    // Flashlight flicker
-    // ------------------------
     void StartHuntFX()
     {
         CacheFlashlightFromMainCamera();
@@ -685,9 +852,6 @@ public class GhostPursuit : MonoBehaviour
         }
     }
 
-    // ------------------------
-    // Player finding
-    // ------------------------
     void ResolvePlayerRootAndBodyTarget(bool force)
     {
         if (!force && playerRoot != null && (!chasePlayerColliderChild || playerBodyTarget != null))
@@ -737,7 +901,6 @@ public class GhostPursuit : MonoBehaviour
         if (l != null) playerFlashlight = l;
     }
 
-    // Finds UI image even if it's disabled in the scene
     Image FindUIImageEvenIfDisabled(string exactName)
     {
         if (string.IsNullOrEmpty(exactName)) return null;
