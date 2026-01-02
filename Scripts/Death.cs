@@ -1,72 +1,64 @@
 using UnityEngine;
 using System.Collections;
+using System.Reflection;
 
-/// <summary>
-/// Death flow (what you asked for):
-/// 1) Call BeginDeath() when sanity reaches 0 (from your Sanity system).
-/// 2) Trigger "Die" animation + play death sound.
-/// 3) Wait 3 seconds.
-/// 4) Freeze the Animator on the last frame (player stays dropped).
-/// 5) Change WHOLE player from layer Player -> Spectator (recursively).
-/// 6) Disable ALL scripts on the PLAYER CYLINDER (every MonoBehaviour).
-/// 7) Spawn a spectator controller that moves the Main Camera with collisions
-///    and keeps the camera at the same world Y (no dropping).
-/// </summary>
 public class Death : MonoBehaviour
 {
-    [Header("How death is triggered")]
-    [Tooltip("IMPORTANT: You said death happens when sanity hits 0. So call BeginDeath() from your Sanity.cs when sanity <= 0.")]
-    public bool autoTriggerDisabled = true; // kept only as a reminder; this script does NOT auto-check your Sanity type.
-
     [Header("References")]
-    [Tooltip("Drag your PLAYER CYLINDER here (the object that has ALL the player scripts). If empty, this GameObject is used.")]
+    [Tooltip("Drag your PLAYER CYLINDER here (the object that has ALL the player scripts). If empty, uses transform.root.")]
     public GameObject playerCylinder;
 
-    [Tooltip("Animator that contains the Die trigger (often on the model child).")]
+    [Tooltip("Animator that contains the Die parameter (usually on the model child). If empty, auto-finds in children.")]
     public Animator animator;
 
-    [Tooltip("AudioSource used to play death sound (can be on cylinder).")]
     public AudioSource audioSource;
 
-    [Tooltip("Main camera to move in spectator. If empty, Camera.main is used.")]
+    [Tooltip("Main camera to control in spectator. If empty, Camera.main is used.")]
     public Camera mainCamera;
 
-    [Header("Animation")]
-    [Tooltip("Animator trigger parameter name.")]
-    public string dieTrigger = "Die";
+    [Header("Death Parameter")]
+    public string dieParamName = "Die";
 
-    [Tooltip("Animator layer index (usually 0).")]
-    public int animatorLayer = 0;
+    public enum DieParamMode { Trigger, Bool }
+    [Tooltip("IMPORTANT: If your Animator uses a BOOL named 'Die' (very common), set this to Bool.")]
+    public DieParamMode dieParamMode = DieParamMode.Trigger;
 
-    [Tooltip("If your death clip uses root motion, enable this so the body drops properly.")]
+    [Tooltip("If DieParamMode is Bool, set this value on death.")]
+    public bool dieBoolValue = true;
+
+    [Header("Root Motion / Falling to floor")]
+    [Tooltip("Enable root motion during death if your death animation moves the body down.")]
     public bool enableRootMotionDuringDeath = true;
 
-    [Tooltip("Optional: If you KNOW the exact state name for the death animation, put it here to freeze precisely at the end. Otherwise leave blank.")]
+    [Tooltip("Optional: exact state name for the death anim to freeze precisely at the end. Leave blank if unsure.")]
     public string dieStateName = "";
+
+    public int animatorLayer = 0;
 
     [Header("Audio")]
     public AudioClip deathClip;
 
     [Header("Timing")]
-    [Tooltip("Seconds to wait after triggering death before spectator mode begins.")]
     public float spectatorDelay = 3f;
 
     [Header("Layers")]
     public string playerLayerName = "Player";
     public string spectatorLayerName = "Spectator";
 
+    [Header("Post Processing Layer Switch")]
+    [Tooltip("Camera post-processing will switch from this Layer to the spectator Layer when spectator begins.")]
+    public string postProcessingLayerName = "PostProcessing";
+    public string spectatorPostProcessingLayerName = "SpectatorPostProcessing";
+
     [Header("Disable scripts")]
     [Tooltip("Disable every MonoBehaviour on the playerCylinder (except this Death script until the end).")]
     public bool disableAllScriptsOnCylinder = true;
 
-    [Tooltip("Disable Death script too at the very end (after spectator is created).")]
+    [Tooltip("Disable Death too at the very end (after spectator is created).")]
     public bool disableDeathScriptToo = true;
 
     [Header("Spectator")]
-    [Tooltip("If true, we spawn a spectator controller object with CharacterController collisions and parent the camera to it.")]
     public bool spawnSpectatorController = true;
-
-    [Tooltip("Keep camera at EXACT same world Y during spectator (prevents dropping).")]
     public bool keepCameraWorldY = true;
 
     [Header("Spectator Collision (CharacterController)")]
@@ -82,19 +74,25 @@ public class Death : MonoBehaviour
     [Header("Debug")]
     public bool debugLogs = false;
 
-    private bool deadStarted = false;
+    private bool deadStarted;
 
     private void Awake()
     {
-        if (playerCylinder == null) playerCylinder = gameObject;
-        if (mainCamera == null) mainCamera = Camera.main;
-        if (audioSource == null) audioSource = GetComponent<AudioSource>();
-        if (animator == null) animator = GetComponentInChildren<Animator>();
+        // Cylinder default: root (safer than gameObject)
+        if (playerCylinder == null)
+            playerCylinder = transform.root.gameObject;
+
+        if (mainCamera == null)
+            mainCamera = Camera.main;
+
+        if (audioSource == null)
+            audioSource = GetComponent<AudioSource>();
+
+        // Auto-find animator in children (usually on model)
+        if (animator == null)
+            animator = playerCylinder.GetComponentInChildren<Animator>(true);
     }
 
-    /// <summary>
-    /// Call this from your Sanity.cs when sanity <= 0.
-    /// </summary>
     public void BeginDeath()
     {
         if (deadStarted) return;
@@ -104,64 +102,74 @@ public class Death : MonoBehaviour
 
     private IEnumerator DeathRoutine()
     {
-        Log("Death started");
+        Log("Death started.");
 
-        // Trigger animation
-        if (animator != null)
+        // Make absolutely sure animator is valid and enabled
+        if (animator == null)
         {
-            animator.speed = 1f;
-            animator.applyRootMotion = enableRootMotionDuringDeath;
-
-            animator.ResetTrigger(dieTrigger);
-            animator.SetTrigger(dieTrigger);
-        }
-
-        // Play sound
-        if (audioSource != null && deathClip != null)
-        {
-            audioSource.PlayOneShot(deathClip);
-        }
-
-        // Wait 3 seconds (or whatever you set)
-        yield return new WaitForSeconds(spectatorDelay);
-
-        // Freeze on last frame so body stays on floor
-        FreezeAnimatorOnLastFrame();
-
-        // Switch player layers to Spectator (recursively)
-        int specLayer = LayerMask.NameToLayer(spectatorLayerName);
-        if (specLayer >= 0)
-        {
-            SetLayerRecursively(gameObject, specLayer);
-            Log($"Player layer -> {spectatorLayerName}");
+            Log("ERROR: Animator not found. Assign animator on the model or ensure it exists in children.");
         }
         else
         {
-            Log($"Spectator layer '{spectatorLayerName}' not found. Create it in Unity Layers.");
+            animator.enabled = true;
+
+            if (animator.runtimeAnimatorController == null)
+            {
+                Log("ERROR: Animator has no Controller assigned at runtime.");
+            }
+
+            animator.applyRootMotion = enableRootMotionDuringDeath;
+            animator.speed = 1f;
+
+            // Set death parameter (Trigger OR Bool)
+            if (dieParamMode == DieParamMode.Trigger)
+            {
+                animator.ResetTrigger(dieParamName);
+                animator.SetTrigger(dieParamName);
+                Log($"Animator Trigger set: {dieParamName}");
+            }
+            else
+            {
+                animator.SetBool(dieParamName, dieBoolValue);
+                Log($"Animator Bool set: {dieParamName} = {dieBoolValue}");
+            }
         }
 
-        // Disable ALL scripts on Cylinder
+        // Death audio
+        if (audioSource != null && deathClip != null)
+            audioSource.PlayOneShot(deathClip);
+
+        // Wait before spectator
+        yield return new WaitForSeconds(spectatorDelay);
+
+        // Freeze pose so body stays on floor (if animation actually moved it)
+        FreezeAnimatorOnLastFrame();
+
+        // HARD FORCE: set Cylinder + everything under it to Spectator layer
+        ForceCylinderToSpectatorLayer();
+
+        // Switch camera post-processing layer mask
+        SwitchCameraPostProcessingLayer();
+
+        // Disable ALL scripts on cylinder (everything)
         DisableAllScriptsOnCylinder();
 
-        // Create spectator controller with collisions and keep camera Y
+        // Spawn spectator controller + attach camera
         if (spawnSpectatorController)
-        {
             CreateSpectatorController();
-        }
 
-        // Finally disable Death too (optional)
+        // Disable this script last if you want
         if (disableDeathScriptToo)
-        {
             this.enabled = false;
-        }
 
-        Log("Death routine complete. Spectator active.");
+        Log("Death routine complete.");
     }
 
     private void FreezeAnimatorOnLastFrame()
     {
         if (animator == null) return;
 
+        // If you provided a state name, jump to its end.
         if (!string.IsNullOrEmpty(dieStateName))
         {
             animator.Play(dieStateName, animatorLayer, 1f);
@@ -169,71 +177,87 @@ public class Death : MonoBehaviour
         }
         else
         {
-            AnimatorStateInfo st = animator.GetCurrentAnimatorStateInfo(animatorLayer);
+            // Freeze whatever state is currently active on that layer
+            var st = animator.GetCurrentAnimatorStateInfo(animatorLayer);
             animator.Play(st.fullPathHash, animatorLayer, 1f);
             animator.Update(0f);
         }
 
-        animator.speed = 0f; // freeze pose
+        animator.speed = 0f;
         Log("Animator frozen on last frame.");
+    }
+
+    private void ForceCylinderToSpectatorLayer()
+    {
+        if (playerCylinder == null)
+            playerCylinder = transform.root.gameObject;
+
+        int specLayer = LayerMask.NameToLayer(spectatorLayerName);
+        if (specLayer < 0)
+        {
+            Log($"ERROR: Layer '{spectatorLayerName}' does not exist. Create it in Unity Layers.");
+            return;
+        }
+
+        SetLayerRecursively(playerCylinder, specLayer);
+
+        // OPTIONAL extra safety: if your model is NOT under cylinder, also set root
+        SetLayerRecursively(transform.root.gameObject, specLayer);
+
+        Log($"Forced Cylinder + Root to layer: {spectatorLayerName}");
     }
 
     private void DisableAllScriptsOnCylinder()
     {
         if (!disableAllScriptsOnCylinder) return;
 
-        if (playerCylinder == null) playerCylinder = gameObject;
+        if (playerCylinder == null)
+            playerCylinder = transform.root.gameObject;
 
-        MonoBehaviour[] all = playerCylinder.GetComponents<MonoBehaviour>();
+        var all = playerCylinder.GetComponents<MonoBehaviour>();
         foreach (var mb in all)
         {
             if (mb == null) continue;
 
-            // Keep this Death script alive until spectator is created
+            // Keep Death alive until spectator is spawned
             if (mb == this) continue;
 
             mb.enabled = false;
         }
 
-        Log("Disabled ALL MonoBehaviours on playerCylinder (except Death temporarily).");
+        Log("Disabled ALL MonoBehaviours on Cylinder (except Death temporarily).");
     }
 
     private void CreateSpectatorController()
     {
         if (mainCamera == null)
         {
-            Log("No main camera found. Assign mainCamera or tag your camera MainCamera.");
+            Log("ERROR: No mainCamera found. Assign it or tag camera MainCamera.");
             return;
         }
 
         Transform camT = mainCamera.transform;
-
-        // Store camera world pose BEFORE parenting
         Vector3 camWorldPos = camT.position;
         Quaternion camWorldRot = camT.rotation;
 
-        // Create controller object at camera position
         GameObject spec = new GameObject("SpectatorController");
         spec.transform.position = camWorldPos;
         spec.transform.rotation = Quaternion.Euler(0f, camWorldRot.eulerAngles.y, 0f);
 
-        // Put controller on Spectator layer too (optional but nice)
         int specLayer = LayerMask.NameToLayer(spectatorLayerName);
-        if (specLayer >= 0) SetLayerRecursively(spec, specLayer);
+        if (specLayer >= 0)
+            SetLayerRecursively(spec, specLayer);
 
-        // Collisions
         CharacterController cc = spec.AddComponent<CharacterController>();
         cc.height = spectatorControllerHeight;
         cc.radius = spectatorControllerRadius;
         cc.center = new Vector3(0f, cc.height * 0.5f, 0f);
         cc.stepOffset = 0.25f;
 
-        // Parent camera to controller while KEEPING world transform
         camT.SetParent(spec.transform, true);
         camT.position = camWorldPos;
         camT.rotation = camWorldRot;
 
-        // Add controller script
         SpectatorController controller = spec.AddComponent<SpectatorController>();
         controller.cc = cc;
         controller.cameraTransform = camT;
@@ -247,8 +271,71 @@ public class Death : MonoBehaviour
         Log("Spectator controller created.");
     }
 
+    private void SwitchCameraPostProcessingLayer()
+    {
+        if (mainCamera == null) return;
+
+        int fromLayer = LayerMask.NameToLayer(postProcessingLayerName);
+        int toLayer = LayerMask.NameToLayer(spectatorPostProcessingLayerName);
+
+        if (toLayer < 0)
+        {
+            Log($"ERROR: Layer '{spectatorPostProcessingLayerName}' does not exist. Create it.");
+            return;
+        }
+
+        // We will set volumeLayerMask to ONLY the spectator PP layer.
+        int spectatorMask = (1 << toLayer);
+
+        // -------- URP/HDRP Volume Mask (UniversalAdditionalCameraData.volumeLayerMask) ----------
+        // Type: UnityEngine.Rendering.Universal.UniversalAdditionalCameraData
+        // Property: volumeLayerMask
+        var cam = mainCamera;
+        var additionalData = cam.GetComponent("UnityEngine.Rendering.Universal.UniversalAdditionalCameraData");
+        if (additionalData != null)
+        {
+            PropertyInfo p = additionalData.GetType().GetProperty("volumeLayerMask");
+            if (p != null && p.PropertyType == typeof(LayerMask))
+            {
+                p.SetValue(additionalData, (LayerMask)spectatorMask);
+                Log($"URP Volume Layer Mask switched to '{spectatorPostProcessingLayerName}'.");
+                return;
+            }
+        }
+
+        // -------- PostProcessing v2 (PostProcessLayer.volumeLayer) ----------
+        // Type: UnityEngine.Rendering.PostProcessing.PostProcessLayer
+        // Field/Property: volumeLayer
+        var ppl = cam.GetComponent("UnityEngine.Rendering.PostProcessing.PostProcessLayer");
+        if (ppl != null)
+        {
+            var t = ppl.GetType();
+
+            // Try property first
+            PropertyInfo prop = t.GetProperty("volumeLayer");
+            if (prop != null && prop.PropertyType == typeof(LayerMask))
+            {
+                prop.SetValue(ppl, (LayerMask)spectatorMask);
+                Log($"PPv2 volumeLayer switched to '{spectatorPostProcessingLayerName}'.");
+                return;
+            }
+
+            // Try field fallback
+            FieldInfo field = t.GetField("volumeLayer");
+            if (field != null && field.FieldType == typeof(LayerMask))
+            {
+                field.SetValue(ppl, (LayerMask)spectatorMask);
+                Log($"PPv2 volumeLayer switched to '{spectatorPostProcessingLayerName}'.");
+                return;
+            }
+        }
+
+        Log("No known post-processing component found to switch layer mask (URP AdditionalCameraData / PPv2 PostProcessLayer).");
+    }
+
     private void SetLayerRecursively(GameObject obj, int layer)
     {
+        if (obj == null) return;
         obj.layer = layer;
         foreach (Transform child in obj.transform)
         {
@@ -259,17 +346,11 @@ public class Death : MonoBehaviour
 
     private void Log(string msg)
     {
-        if (debugLogs) Debug.Log("[Death] " + msg, this);
+        if (debugLogs)
+            Debug.Log("[Death] " + msg, this);
     }
 }
 
-/// <summary>
-/// Spectator movement controller:
-/// - Moves with CharacterController (collisions)
-/// - Mouse look
-/// - Keeps camera at fixed world Y (no dropping) if enabled
-/// IMPORTANT: We fully-qualify UnityEngine.Cursor in case your project has its own Cursor class.
-/// </summary>
 public class SpectatorController : MonoBehaviour
 {
     [HideInInspector] public CharacterController cc;
@@ -297,7 +378,6 @@ public class SpectatorController : MonoBehaviour
 
         if (lockCursor)
         {
-            // Fully qualified to avoid conflicts if you have your own Cursor class.
             UnityEngine.Cursor.lockState = CursorLockMode.Locked;
             UnityEngine.Cursor.visible = false;
         }
@@ -307,7 +387,6 @@ public class SpectatorController : MonoBehaviour
     {
         if (cc == null || cameraTransform == null) return;
 
-        // Mouse look
         float mx = Input.GetAxis("Mouse X") * lookSensitivity;
         float my = Input.GetAxis("Mouse Y") * lookSensitivity;
 
@@ -318,7 +397,6 @@ public class SpectatorController : MonoBehaviour
         transform.rotation = Quaternion.Euler(0f, yaw, 0f);
         cameraTransform.localRotation = Quaternion.Euler(pitch, 0f, 0f);
 
-        // WASD move
         float h = Input.GetAxisRaw("Horizontal");
         float v = Input.GetAxisRaw("Vertical");
         Vector3 input = new Vector3(h, 0f, v);
@@ -329,7 +407,6 @@ public class SpectatorController : MonoBehaviour
 
         cc.Move(move * Time.deltaTime);
 
-        // Keep camera at fixed Y so it never drops
         if (keepWorldY)
         {
             Vector3 p = cameraTransform.position;
