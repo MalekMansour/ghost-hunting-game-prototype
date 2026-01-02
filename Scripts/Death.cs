@@ -320,4 +320,20 @@ public class SpectatorController : MonoBehaviour
 
         // WASD move
         float h = Input.GetAxisRaw("Horizontal");
-        float v = Input.GetAxisRaw("Vert
+        float v = Input.GetAxisRaw("Vertical");
+        Vector3 input = new Vector3(h, 0f, v);
+        input = Vector3.ClampMagnitude(input, 1f);
+
+        float speed = moveSpeed * (Input.GetKey(KeyCode.LeftShift) ? sprintMultiplier : 1f);
+        Vector3 move = (transform.right * input.x + transform.forward * input.z) * speed;
+
+        cc.Move(move * Time.deltaTime);
+
+        // Keep camera at fixed Y so it never drops
+        if (keepWorldY)
+        {
+            Vector3 p = cameraTransform.position;
+            cameraTransform.position = new Vector3(p.x, fixedWorldY, p.z);
+        }
+    }
+}
