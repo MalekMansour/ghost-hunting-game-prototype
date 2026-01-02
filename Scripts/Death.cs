@@ -5,16 +5,16 @@ public class Death : MonoBehaviour
 {
     [Header("Sanity")]
     [Tooltip("Optional: call BeginDeath() yourself from your sanity system. If assigned, this script will auto-check it.")]
-    public Sanity sanity;                 // optional external script
+    public Sanity sanity;               
     public float sanityZeroThreshold = 0f;
 
     [Header("Animation")]
-    public Animator animator;             // can be on the player model or cylinder
+    public Animator animator;        
     [Tooltip("Animator trigger parameter name.")]
     public string dieTrigger = "Die";
 
     [Tooltip("Optional: If you want to hard-jump to the end of a specific state, put its name here. Leave empty to use current state.")]
-    public string dieStateName = "";      // e.g. "Player_Die" (optional)
+    public string dieStateName = "";  
 
     [Tooltip("Animator layer index for the death state (usually 0).")]
     public int animatorLayer = 0;
@@ -89,9 +89,7 @@ public class Death : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Call this once when sanity reaches 0.
-    /// </summary>
+
     public void BeginDeath()
     {
         if (deadStarted) return;
@@ -257,12 +255,6 @@ public class Death : MonoBehaviour
     }
 }
 
-/// <summary>
-/// Simple spectator controller:
-/// - WASD movement using CharacterController (collisions)
-/// - Mouse look
-/// - Optionally keeps camera at a fixed world Y so it never "drops"
-/// </summary>
 public class SpectatorController : MonoBehaviour
 {
     [HideInInspector] public CharacterController cc;
@@ -318,9 +310,6 @@ public class SpectatorController : MonoBehaviour
 
         float speed = moveSpeed * (Input.GetKey(KeyCode.LeftShift) ? sprintMultiplier : 1f);
         Vector3 move = (transform.right * input.x + transform.forward * input.z) * speed;
-
-        // CharacterController requires a Y component sometimes; we keep it minimal.
-        // If keepWorldY is true, we force camera to fixed Y after moving.
         cc.Move(move * Time.deltaTime);
 
         if (keepWorldY)
@@ -331,10 +320,6 @@ public class SpectatorController : MonoBehaviour
     }
 }
 
-/// <summary>
-/// OPTIONAL placeholder if you want this Death.cs to compile even without your sanity script.
-/// If you already have your own Sanity script, delete this class.
-/// </summary>
 public class Sanity : MonoBehaviour
 {
     public float currentSanity = 100f;
