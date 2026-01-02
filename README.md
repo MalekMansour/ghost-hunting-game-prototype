@@ -2,18 +2,18 @@
 A multiplayer ghost hunting horror game by MINGO.
 
 Maps:
-The Abyss Asylum 
-Kid’s Pizza Palace
-Aquatic Center Pool
-Moonlight Carnival
+- The Abyss Asylum 
+- Kid’s Pizza Place
+- Aquatic Center Pool
+- Moonlight Carnival
 
-Future Maps:
-Cruise Ship Map
-Cinema Map
-Escape Room Map
-Streamer’s House
-Grocery Store Map
-Highschool Map
+Potential Future Maps:
+- Cruise Ship Map
+- Cinema Map
+- Escape Room Map
+- Streamer’s House
+- Grocery Store Map
+- Highschool Map
 
 Ghosts:
 
