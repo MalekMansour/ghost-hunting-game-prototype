@@ -1,22 +1,22 @@
 using UnityEngine;
 using System.Collections;
-using System.Reflection;
 
 public class Death : MonoBehaviour
 {
     [Header("References")]
-    [Tooltip("Drag your PLAYER CYLINDER here (the object that has ALL the player scripts). If empty, uses transform.root.")]
+    [Tooltip("Drag your PLAYER CYLINDER here. If empty, uses transform.root.")]
     public GameObject playerCylinder;
 
-    [Tooltip("Animator on the model (usually a child). Leave empty: will auto-find at death time.")]
+    [Tooltip("Animator on the model. Leave empty: will auto-find at death time.")]
     public Animator animator;
 
     [Tooltip("Root transform of the model (where ragdoll bones live). Leave empty: will use animator.transform.")]
     public Transform modelRoot;
 
-    public AudioSource audioSource;
+    [Tooltip("If set, this is the main ragdoll bone to rotate (usually Hips/Pelvis). Drag it in Inspector.")]
+    public Transform ragdollHips;
 
-    [Tooltip("Main camera (child of player at runtime). Leave empty: Camera.main.")]
+    public AudioSource audioSource;
     public Camera mainCamera;
 
     [Header("Death Animator Parameter")]
@@ -25,24 +25,36 @@ public class Death : MonoBehaviour
     public DieParamMode dieParamMode = DieParamMode.Trigger;
     public bool dieBoolValue = true;
 
-    [Header("Death Timing")]
+    [Header("Timing")]
     public float spectatorDelay = 3f;
     public float ragdollDelay = 0.75f;
-
-    [Tooltip("Enable root motion during the short death animation start (if your clip uses it).")]
-    public bool enableRootMotionDuringDeath = true;
 
     [Header("Audio")]
     public AudioClip deathClip;
 
     [Header("Layers")]
     public string spectatorLayerName = "Spectator";
-    public string spectatorPostProcessingLayerName = "SpectatorPostProcessing";
+
+    [Header("Ragdoll Settings")]
+    public bool detachModelOnRagdoll = true;
+    public bool disableCylinderCharacterControllerOnRagdoll = true;
+
+    public enum CorpseRotationMode { None, UseEuler, UseTransform }
+    [Header("Corpse Rotation (Inspector Pick)")]
+    public CorpseRotationMode corpseRotationMode = CorpseRotationMode.None;
+
+    [Tooltip("If UseEuler: set the corpse rotation here (try X=90 or X=-90 depending on rig).")]
+    public Vector3 corpseEulerRotation = new Vector3(90f, 0f, 0f);
+
+    [Tooltip("If UseTransform: drag a reference Transform whose rotation you want to copy.")]
+    public Transform corpseRotationReference;
+
+    [Tooltip("If true, we 'lock' hips rotation right after applying corpse rotation so physics won't stand it back up.")]
+    public bool lockHipsRotationAfterApply = true;
 
     [Header("Disable scripts")]
     public bool disableAllScriptsOnCylinder = true;
-    public bool disableAllCameraScripts = true;
-    public bool disableDeathScriptToo = true;
+    public bool disableAllCameraScripts = false; // now PlayerView handles spectator mode instead
 
     [Header("Spectator Movement")]
     public float spectatorControllerHeight = 1.8f;
@@ -55,13 +67,6 @@ public class Death : MonoBehaviour
     [Header("Spectator Camera")]
     public bool keepCameraWorldY = true;
 
-    [Header("Ragdoll")]
-    [Tooltip("Detach the model from the player cylinder when ragdoll starts (fixes 'standing corpse').")]
-    public bool detachModelOnRagdoll = true;
-
-    [Tooltip("If true, disables the CharacterController on the cylinder when ragdoll starts (prevents capsule from holding body).")]
-    public bool disableCylinderCharacterControllerOnRagdoll = true;
-
     [Header("Debug")]
     public bool debugLogs = true;
 
@@ -72,8 +77,6 @@ public class Death : MonoBehaviour
 
     private Collider[] cylinderColliders;
     private CharacterController cylinderCC;
-
-    private Transform originalModelParent;
 
     private void Awake()
     {
@@ -99,9 +102,8 @@ public class Death : MonoBehaviour
             yield break;
         }
 
-        // Start death animation
+        // Trigger death animation
         animator.enabled = true;
-        animator.applyRootMotion = enableRootMotionDuringDeath;
         animator.speed = 1f;
 
         if (dieParamMode == DieParamMode.Trigger)
@@ -114,29 +116,23 @@ public class Death : MonoBehaviour
             animator.SetBool(dieParamName, dieBoolValue);
         }
 
-        // Sound
         if (audioSource != null && deathClip != null)
             audioSource.PlayOneShot(deathClip);
 
-        // Wait, then ragdoll
         if (ragdollDelay > 0f)
             yield return new WaitForSeconds(ragdollDelay);
 
         EnableRagdoll();
 
-        // Wait remaining time until spectator
+        // Apply your chosen corpse rotation (Inspector)
+        ApplyCorpseRotation();
+
         float remaining = Mathf.Max(0f, spectatorDelay - ragdollDelay);
         if (remaining > 0f)
             yield return new WaitForSeconds(remaining);
 
-        // Switch player layers to Spectator (you requested this)
-        ForceRootAndCylinderToSpectatorLayer();
-
-        // Enter spectator (camera DETACHED + includes spectator layer so corpse is visible)
+        ForceAllToSpectatorLayer();
         EnterSpectator();
-
-        if (disableDeathScriptToo)
-            this.enabled = false;
     }
 
     private void EnsureRuntimeReferences()
@@ -159,68 +155,47 @@ public class Death : MonoBehaviour
             cylinderColliders = playerCylinder.GetComponentsInChildren<Collider>(true);
             cylinderCC = playerCylinder.GetComponent<CharacterController>();
 
-            // Start ragdoll OFF
             SetRagdollState(false);
         }
     }
 
-    // ---------- RAGDOLL ----------
     private void EnableRagdoll()
     {
         if (modelRoot == null || ragdollBodies == null || ragdollBodies.Length == 0)
         {
-            Log("Ragdoll FAILED: no rigidbodies found under modelRoot. You need a ragdoll rig (Rigidbody + Collider on bones).");
+            Log("Ragdoll FAILED: no rigidbodies under modelRoot.");
             return;
         }
 
-        // Detach model so the cylinder/root doesn't keep it upright
+        // Detach model from cylinder so root transform doesn't keep it upright
         if (detachModelOnRagdoll && modelRoot.parent != null)
         {
-            originalModelParent = modelRoot.parent;
-            Vector3 p = modelRoot.position;
-            Quaternion r = modelRoot.rotation;
-
-            modelRoot.SetParent(null, true); // keep world transform
-            modelRoot.position = p;
-            modelRoot.rotation = r;
-
-            Log("Model detached from player root for ragdoll.");
+            modelRoot.SetParent(null, true);
+            Log("Model detached for ragdoll.");
         }
 
-        // Stop animator (don’t fight physics)
-        if (animator != null)
-        {
-            animator.applyRootMotion = false;
-            animator.enabled = false;
-        }
+        // Stop animator so it doesn't fight physics
+        animator.enabled = false;
 
-        // Disable cylinder CC so it can't hold/rotate anything
         if (disableCylinderCharacterControllerOnRagdoll && cylinderCC != null)
             cylinderCC.enabled = false;
 
-        // Enable ragdoll physics
         SetRagdollState(true);
 
-        // Disable cylinder colliders that are NOT part of the model (prevents capsule/cylinder from blocking corpse)
+        // Disable cylinder colliders that aren't part of the model
         if (cylinderColliders != null && modelRoot != null)
         {
             foreach (var c in cylinderColliders)
             {
                 if (c == null) continue;
-
-                // Keep model/bone colliders ON
                 if (c.transform.IsChildOf(modelRoot)) continue;
-
                 c.enabled = false;
             }
         }
-
-        Log("Ragdoll ENABLED.");
     }
 
     private void SetRagdollState(bool enabled)
     {
-        // Rigidbody on bones
         foreach (var rb in ragdollBodies)
         {
             if (rb == null) continue;
@@ -228,7 +203,6 @@ public class Death : MonoBehaviour
             rb.detectCollisions = enabled;
         }
 
-        // Colliders on bones
         foreach (var col in ragdollColliders)
         {
             if (col == null) continue;
@@ -236,23 +210,49 @@ public class Death : MonoBehaviour
         }
     }
 
-    // ---------- LAYERS ----------
-    private void ForceRootAndCylinderToSpectatorLayer()
+    private void ApplyCorpseRotation()
+    {
+        if (corpseRotationMode == CorpseRotationMode.None) return;
+
+        Transform target = ragdollHips != null ? ragdollHips : modelRoot;
+        if (target == null) return;
+
+        // apply rotation
+        if (corpseRotationMode == CorpseRotationMode.UseEuler)
+        {
+            target.rotation = Quaternion.Euler(corpseEulerRotation);
+            Log($"Applied corpse euler rotation: {corpseEulerRotation}");
+        }
+        else if (corpseRotationMode == CorpseRotationMode.UseTransform && corpseRotationReference != null)
+        {
+            target.rotation = corpseRotationReference.rotation;
+            Log("Applied corpse transform rotation reference.");
+        }
+
+        // Optional: lock hips rotation so physics doesn’t stand it back up
+        if (lockHipsRotationAfterApply && ragdollHips != null)
+        {
+            Rigidbody hipsRb = ragdollHips.GetComponent<Rigidbody>();
+            if (hipsRb != null)
+            {
+                hipsRb.constraints |= RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+                Log("Locked hips X/Z rotation (prevents standing back up).");
+            }
+        }
+    }
+
+    private void ForceAllToSpectatorLayer()
     {
         int specLayer = LayerMask.NameToLayer(spectatorLayerName);
         if (specLayer < 0)
         {
-            Log($"ERROR: Layer '{spectatorLayerName}' not found. Create it in Unity Layers.");
+            Log($"ERROR: Layer '{spectatorLayerName}' not found.");
             return;
         }
 
         SetLayerRecursively(transform.root.gameObject, specLayer);
         if (playerCylinder != null) SetLayerRecursively(playerCylinder, specLayer);
-
-        // If modelRoot was detached, also set it to spectator so it matches your requirement
         if (modelRoot != null) SetLayerRecursively(modelRoot.gameObject, specLayer);
-
-        Log($"Forced Root + Cylinder (+ detached model) to layer '{spectatorLayerName}'.");
     }
 
     private void SetLayerRecursively(GameObject obj, int layer)
@@ -266,48 +266,33 @@ public class Death : MonoBehaviour
         }
     }
 
-    // ---------- SPECTATOR ----------
     private void EnterSpectator()
     {
-        if (mainCamera == null)
-        {
-            Log("ERROR: mainCamera missing.");
-            return;
-        }
+        if (mainCamera == null) return;
 
-        // Make sure camera can SEE Spectator layer (this is why your corpse disappeared)
+        // Make sure camera can see Spectator layer (so corpse stays visible)
         int specLayer = LayerMask.NameToLayer(spectatorLayerName);
         if (specLayer >= 0)
             mainCamera.cullingMask |= (1 << specLayer);
 
-        // Switch post processing layer mask on the camera to SpectatorPostProcessing
-        SwitchCameraPostProcessingLayer(mainCamera);
+        // Tell PlayerView to enter spectator mode (stops rotating body + switches PP layer)
+        PlayerView pv = mainCamera.GetComponent<PlayerView>();
+        if (pv != null)
+            pv.SetSpectatorMode(true);
 
-        // Disable all scripts on cylinder (movement etc.)
+        // Disable all scripts on cylinder
         if (disableAllScriptsOnCylinder && playerCylinder != null)
         {
             var all = playerCylinder.GetComponents<MonoBehaviour>();
             foreach (var mb in all)
             {
                 if (mb == null) continue;
-                if (mb == this) continue; // keep Death alive until spectator exists
+                if (mb == this) continue;
                 mb.enabled = false;
             }
         }
 
-        // Disable camera scripts like PlayerView so it can never rotate the body again
-        if (disableAllCameraScripts)
-        {
-            var camBehaviours = mainCamera.GetComponents<MonoBehaviour>();
-            foreach (var b in camBehaviours)
-            {
-                if (b == null) continue;
-                if (b == this) continue;
-                b.enabled = false;
-            }
-        }
-
-        // FULL DETACH: camera is no longer under player
+        // DETACH camera from body completely by creating spectator rig
         Transform camT = mainCamera.transform;
         Vector3 camWorldPos = camT.position;
         Quaternion camWorldRot = camT.rotation;
@@ -316,8 +301,7 @@ public class Death : MonoBehaviour
         spec.transform.position = camWorldPos;
         spec.transform.rotation = Quaternion.Euler(0f, camWorldRot.eulerAngles.y, 0f);
 
-        if (specLayer >= 0)
-            SetLayerRecursively(spec, specLayer);
+        if (specLayer >= 0) SetLayerRecursively(spec, specLayer);
 
         CharacterController cc = spec.AddComponent<CharacterController>();
         cc.height = spectatorControllerHeight;
@@ -338,69 +322,6 @@ public class Death : MonoBehaviour
         controller.lockCursor = lockCursor;
         controller.keepWorldY = keepCameraWorldY;
         controller.fixedWorldY = camWorldPos.y;
-
-        Log("Spectator entered: camera detached + corpse visible.");
-    }
-
-    // ---------- POST PROCESSING SWITCH ----------
-    private void SwitchCameraPostProcessingLayer(Camera cam)
-    {
-        int toLayer = LayerMask.NameToLayer(spectatorPostProcessingLayerName);
-        if (toLayer < 0)
-        {
-            Log($"ERROR: Layer '{spectatorPostProcessingLayerName}' not found. Create it.");
-            return;
-        }
-
-        int spectatorMask = (1 << toLayer);
-
-        // URP: UniversalAdditionalCameraData.volumeLayerMask
-        System.Type urpType =
-            System.Type.GetType("UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime");
-
-        if (urpType != null)
-        {
-            var urp = cam.GetComponent(urpType);
-            if (urp != null)
-            {
-                var prop = urpType.GetProperty("volumeLayerMask");
-                if (prop != null && prop.PropertyType == typeof(LayerMask))
-                {
-                    prop.SetValue(urp, (LayerMask)spectatorMask);
-                    Log($"URP volumeLayerMask -> '{spectatorPostProcessingLayerName}'");
-                    return;
-                }
-            }
-        }
-
-        // PPv2: PostProcessLayer.volumeLayer
-        System.Type ppv2Type =
-            System.Type.GetType("UnityEngine.Rendering.PostProcessing.PostProcessLayer, Unity.Postprocessing.Runtime");
-
-        if (ppv2Type != null)
-        {
-            var pp = cam.GetComponent(ppv2Type);
-            if (pp != null)
-            {
-                var prop = ppv2Type.GetProperty("volumeLayer");
-                if (prop != null && prop.PropertyType == typeof(LayerMask))
-                {
-                    prop.SetValue(pp, (LayerMask)spectatorMask);
-                    Log($"PPv2 volumeLayer -> '{spectatorPostProcessingLayerName}'");
-                    return;
-                }
-
-                var field = ppv2Type.GetField("volumeLayer");
-                if (field != null && field.FieldType == typeof(LayerMask))
-                {
-                    field.SetValue(pp, (LayerMask)spectatorMask);
-                    Log($"PPv2 volumeLayer(field) -> '{spectatorPostProcessingLayerName}'");
-                    return;
-                }
-            }
-        }
-
-        Log("Post processing switch FAILED: camera has neither URP AdditionalCameraData nor PPv2 PostProcessLayer.");
     }
 
     private void Log(string msg)
@@ -427,13 +348,6 @@ public class SpectatorController : MonoBehaviour
 
     private void Start()
     {
-        if (cameraTransform != null)
-        {
-            Vector3 e = cameraTransform.rotation.eulerAngles;
-            yaw = e.y;
-            pitch = e.x;
-        }
-
         if (lockCursor)
         {
             UnityEngine.Cursor.lockState = CursorLockMode.Locked;
