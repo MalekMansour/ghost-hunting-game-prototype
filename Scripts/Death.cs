@@ -155,4 +155,3 @@ public class Death : MonoBehaviour
 
     public bool IsDead() => hasDied;
 }
-
