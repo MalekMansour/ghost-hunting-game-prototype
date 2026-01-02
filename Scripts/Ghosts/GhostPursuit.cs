@@ -93,10 +93,27 @@ public class GhostPursuit : MonoBehaviour
     public Vector2 gruntIntervalRange = new Vector2(1.2f, 2.6f);
     public float footstepInterval = 0.45f;
     [Range(0f, 2f)] public float huntAudioVolume = 1f;
+
     [Header("Per-SFX Volume Scales (3D-safe)")]
     [Range(0f, 10f)] public float gruntVolumeScale = 2.5f;
     [Range(0f, 10f)] public float footstepVolumeScale = 1.0f;
     [Range(0f, 10f)] public float screamVolumeScale = 3.5f;
+
+    // ------------------------
+    // NEW: Attack animation settings
+    // ------------------------
+    [Header("Attack Animation (On Touch)")]
+    [Tooltip("Animator trigger name to fire when the ghost hits the player during a hunt.")]
+    public string attackTriggerName = "Attack";
+
+    [Tooltip("How long to wait before ending the hunt after touching the player (so the attack animation is visible).")]
+    public float endHuntDelayAfterTouch = 0.35f;
+
+    [Tooltip("If true, we temporarily force the model visible at the moment of attack.")]
+    public bool forceVisibleOnTouch = true;
+
+    [Tooltip("How long we force visibility after touching the player.")]
+    public float forceVisibleDuration = 0.5f;
 
     [Header("Debug")]
     public bool debugLogs = false;
@@ -133,6 +150,9 @@ public class GhostPursuit : MonoBehaviour
     private bool cachedModelActive;
     private Transform cachedModelRoot;
     private Coroutine huntVisibilityRoutine;
+
+    // NEW: prevent double-ending / multiple touches
+    private bool endingFromTouch = false;
 
     private const string DifficultyPrefKey = "SelectedDifficulty"; // 0 casual,1 standard,2 pro,3 lethal
 
@@ -179,7 +199,7 @@ public class GhostPursuit : MonoBehaviour
             return;
         }
 
-        if (Time.time >= huntEndTime)
+        if (!endingFromTouch && Time.time >= huntEndTime)
         {
             EndHunt("timer");
             return;
@@ -191,12 +211,15 @@ public class GhostPursuit : MonoBehaviour
             ChasePlayer();
         }
 
-        if (Time.time >= nextTouchTime)
+        if (!endingFromTouch && Time.time >= nextTouchTime)
         {
             if (TryTouchHitPlayer())
             {
                 nextTouchTime = Time.time + touchCooldown;
-                EndHunt("touch");
+
+                // IMPORTANT: do NOT end hunt immediately; let attack animation play.
+                endingFromTouch = true;
+                StartCoroutine(EndHuntAfterAttack(endHuntDelayAfterTouch));
                 return;
             }
         }
@@ -265,6 +288,7 @@ public class GhostPursuit : MonoBehaviour
     {
         if (isHunting) return;
         isHunting = true;
+        endingFromTouch = false;
 
         ResolvePlayerRootAndBodyTarget(force: true);
 
@@ -341,6 +365,15 @@ public class GhostPursuit : MonoBehaviour
         if (ghostEvent) ghostEvent.enabled = true;
 
         nextHuntCheck = Time.time + huntCheckInterval;
+        endingFromTouch = false;
+    }
+
+    IEnumerator EndHuntAfterAttack(float delay)
+    {
+        delay = Mathf.Max(0f, delay);
+        yield return new WaitForSeconds(delay);
+        if (isHunting)
+            EndHunt("touch");
     }
 
     IEnumerator HuntVisibilityLoop()
@@ -365,6 +398,20 @@ public class GhostPursuit : MonoBehaviour
                 yield return new WaitForSeconds(Mathf.Max(0.01f, t));
             }
         }
+    }
+
+    IEnumerator ForceVisibleForSeconds(float seconds)
+    {
+        if (cachedModelRoot == null) yield break;
+
+        bool prev = cachedModelRoot.gameObject.activeSelf;
+        cachedModelRoot.gameObject.SetActive(true);
+
+        yield return new WaitForSeconds(Mathf.Max(0f, seconds));
+
+        // Only restore if we're still hunting and still using visibility control
+        if (isHunting && controlVisibilityDuringHunt)
+            cachedModelRoot.gameObject.SetActive(prev);
     }
 
     // ------------------------
@@ -408,14 +455,26 @@ public class GhostPursuit : MonoBehaviour
     }
 
     // ------------------------
-    // Touch hit (scream + stun)
+    // Touch hit (attack anim + scream + stun)
     // ------------------------
     bool TryTouchHitPlayer()
     {
+        // Only do touch logic DURING a hunt
+        if (!isHunting) return false;
+
         Collider[] hits = Physics.OverlapSphere(transform.position, touchRadius, playerLayer, QueryTriggerInteraction.Ignore);
         if (hits == null || hits.Length == 0) return false;
 
         Transform playerRootFromHit = hits[0].transform.root;
+
+        // NEW: Trigger attack animation on touch
+        TriggerAttackAnimation();
+
+        // Optionally force visibility so you SEE the attack
+        if (forceVisibleOnTouch && cachedModelRoot != null)
+        {
+            StartCoroutine(ForceVisibleForSeconds(forceVisibleDuration));
+        }
 
         // Scream SFX
         PlayTouchScream();
@@ -445,14 +504,40 @@ public class GhostPursuit : MonoBehaviour
         return true;
     }
 
+    void TriggerAttackAnimation()
+    {
+        // Prefer GhostAnimatorDriver if you use it
+        var driver = GetComponentInChildren<GhostAnimatorDriver>(true);
+        if (driver != null)
+        {
+            driver.TriggerAttack();
+            Log("TOUCH -> Attack triggered via GhostAnimatorDriver.");
+            return;
+        }
+
+        // Fallback: direct Animator trigger
+        Animator anim = GetComponentInChildren<Animator>(true);
+        if (anim != null && !string.IsNullOrEmpty(attackTriggerName))
+        {
+            anim.SetTrigger(attackTriggerName);
+            Log($"TOUCH -> Attack triggered on Animator (trigger='{attackTriggerName}').");
+        }
+        else
+        {
+            Log("TOUCH -> No GhostAnimatorDriver/Animator found to trigger Attack.");
+        }
+    }
+
     void PlayTouchScream()
     {
         if (huntAudioSource == null) return;
         if (touchScreamClips == null || touchScreamClips.Length == 0) return;
 
         AudioClip c = touchScreamClips[Random.Range(0, touchScreamClips.Length)];
-        huntAudioSource.PlayOneShot(c, touchScreamVolume);
-        Log($"TOUCH -> scream: {c.name}");
+        // Use your per-sfx scale (3D-safe) and keep the existing touchScreamVolume as a base
+        float finalVol = Mathf.Clamp(touchScreamVolume * screamVolumeScale, 0f, 10f);
+        huntAudioSource.PlayOneShot(c, finalVol);
+        Log($"TOUCH -> scream: {c.name} vol={finalVol:0.00}");
     }
 
     float GetTouchDrainByDifficulty()
@@ -595,7 +680,6 @@ public class GhostPursuit : MonoBehaviour
             {
                 var c = footstepClips[Random.Range(0, footstepClips.Length)];
                 huntAudioSource.PlayOneShot(c, footstepVolumeScale);
-
             }
             yield return new WaitForSeconds(Mathf.Max(0.05f, footstepInterval));
         }
