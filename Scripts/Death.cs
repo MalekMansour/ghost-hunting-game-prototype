@@ -51,7 +51,7 @@ public class Death : MonoBehaviour
     [Tooltip("How far down we try to find ground.")]
     public float snapDownMaxDistance = 10f;
 
-    [Tooltip("Offset applied AFTER grounding.")]
+    [Tooltip("Offset applied AFTER grounding. (IMPORTANT: Now applies even if grounding raycast fails.)")]
     public Vector3 corpseOffsetAfterSnap = new Vector3(0f, 0.02f, 0f);
 
     [Header("Disable scripts")]
@@ -129,7 +129,7 @@ public class Death : MonoBehaviour
 
         yield return null; // one frame so ragdoll colliders/bounds update
 
-        // Proper grounding using the lowest collider point
+        // Proper grounding + ALWAYS apply offset
         GroundCorpseNow();
 
         // spectator after spectatorDelay
@@ -233,53 +233,80 @@ public class Death : MonoBehaviour
     }
 
     /// <summary>
-    /// Grounds the corpse by finding the LOWEST ragdoll collider point (bounds.min.y),
-    /// then moving modelRoot down so that lowest point sits on the ground hit point,
-    /// then applies corpseOffsetAfterSnap.
+    /// Grounds the corpse by finding the LOWEST ragdoll collider (bounds.min.y),
+    /// attempts multiple raycast origins, and ALWAYS applies corpseOffsetAfterSnap
+    /// even if raycasts miss (so your offset actually works).
     /// </summary>
     private void GroundCorpseNow()
     {
         if (corpsePositionMode == CorpsePositionMode.None) return;
-        if (modelRoot == null || ragdollColliders == null || ragdollColliders.Length == 0) return;
+        if (modelRoot == null || ragdollColliders == null || ragdollColliders.Length == 0)
+        {
+            Log("GroundCorpseNow: missing modelRoot or ragdollColliders.");
+            return;
+        }
 
-        // 1) Find lowest ragdoll collider Y (world space)
+        // Find lowest Y among ragdoll collider bounds
         float lowestY = float.PositiveInfinity;
+        Bounds combined = new Bounds(modelRoot.position, Vector3.zero);
+        bool haveBounds = false;
+
         foreach (var col in ragdollColliders)
         {
             if (col == null || !col.enabled) continue;
+
             float y = col.bounds.min.y;
             if (y < lowestY) lowestY = y;
-        }
-        if (float.IsInfinity(lowestY)) return;
 
-        // 2) Raycast down from above that point to find ground
-        Vector3 origin = new Vector3(modelRoot.position.x, lowestY + 1.0f, modelRoot.position.z);
-        if (!Physics.Raycast(origin, Vector3.down, out RaycastHit hit, snapDownMaxDistance + 1.0f, corpseGroundMask, QueryTriggerInteraction.Ignore))
+            if (!haveBounds)
+            {
+                combined = col.bounds;
+                haveBounds = true;
+            }
+            else
+            {
+                combined.Encapsulate(col.bounds);
+            }
+        }
+
+        bool grounded = false;
+
+        if (!float.IsInfinity(lowestY))
         {
-            // If the center ray misses, try from hips (some maps have uneven ground)
-            Transform probe = ragdollHips != null ? ragdollHips : modelRoot;
-            Vector3 origin2 = probe.position + Vector3.up * 1.0f;
+            // Try raycasts from a few good origins (center + bounds corners + hips)
+            Vector3[] origins = new Vector3[]
+            {
+                new Vector3(combined.center.x, combined.max.y + 0.5f, combined.center.z),
+                new Vector3(combined.min.x, combined.max.y + 0.5f, combined.min.z),
+                new Vector3(combined.max.x, combined.max.y + 0.5f, combined.max.z),
+                new Vector3(combined.min.x, combined.max.y + 0.5f, combined.max.z),
+                new Vector3(combined.max.x, combined.max.y + 0.5f, combined.min.z),
+                (ragdollHips != null ? ragdollHips.position + Vector3.up * 1.0f : modelRoot.position + Vector3.up * 1.0f)
+            };
 
-            if (!Physics.Raycast(origin2, Vector3.down, out hit, snapDownMaxDistance + 2.0f, corpseGroundMask, QueryTriggerInteraction.Ignore))
-                return;
+            RaycastHit hit;
+            for (int i = 0; i < origins.Length; i++)
+            {
+                if (Physics.Raycast(origins[i], Vector3.down, out hit, snapDownMaxDistance + 5f, corpseGroundMask, QueryTriggerInteraction.Ignore))
+                {
+                    // Move modelRoot so lowest collider touches ground
+                    float delta = lowestY - hit.point.y;
+                    modelRoot.position -= new Vector3(0f, delta, 0f);
+
+                    grounded = true;
+                    break;
+                }
+            }
         }
 
-        // 3) Recompute lowestY after any physics nudge (safe enough to reuse previous, but we re-evaluate)
-        lowestY = float.PositiveInfinity;
-        foreach (var col in ragdollColliders)
-        {
-            if (col == null || !col.enabled) continue;
-            float y = col.bounds.min.y;
-            if (y < lowestY) lowestY = y;
-        }
-        if (float.IsInfinity(lowestY)) return;
-
-        // 4) Move modelRoot so lowest collider touches the ground hit point
-        float delta = lowestY - hit.point.y;
-        modelRoot.position -= new Vector3(0f, delta, 0f);
-
-        // 5) Apply your tuned offset
+        // IMPORTANT: Apply offset REGARDLESS of grounded success.
         modelRoot.position += corpseOffsetAfterSnap;
+
+        if (debugLogs)
+        {
+            Log($"GroundCorpseNow: grounded={grounded}, applied corpseOffsetAfterSnap={corpseOffsetAfterSnap}");
+            Log($"TIP: If grounded=false, your corpseGroundMask doesn't include the floor OR the floor has no collider.");
+        }
     }
 
     private void ForceAllToSpectatorLayer()
@@ -316,7 +343,10 @@ public class Death : MonoBehaviour
         if (specLayer >= 0)
             mainCamera.cullingMask |= (1 << specLayer);
 
-        // Switch PP + stop body rotation
+        // Disable flashlight FOREVER once dead (on camera or children)
+        DisableFlashlightForever(mainCamera);
+
+        // Switch PP + stop body rotation (and do PP fade if you add it in PlayerView)
         var pv = mainCamera.GetComponent<PlayerView>();
         if (pv != null)
             pv.SetSpectatorMode(true);
@@ -363,6 +393,25 @@ public class Death : MonoBehaviour
         controller.lockCursor = lockCursor;
         controller.keepWorldY = keepCameraWorldY;
         controller.fixedWorldY = camWorldPos.y;
+    }
+
+    private void DisableFlashlightForever(Camera cam)
+    {
+        if (cam == null) return;
+
+        // If your flashlight is just a Light on the camera:
+        var lights = cam.GetComponentsInChildren<Light>(true);
+        foreach (var l in lights)
+            l.enabled = false;
+
+        // If you have a script named "Flashlight" (your own script)
+        var behaviours = cam.GetComponentsInChildren<MonoBehaviour>(true);
+        foreach (var b in behaviours)
+        {
+            if (b == null) continue;
+            if (b.GetType().Name == "Flashlight")
+                b.enabled = false;
+        }
     }
 
     private void Log(string msg)
