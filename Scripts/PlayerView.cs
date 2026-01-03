@@ -1,5 +1,7 @@
 using UnityEngine;
 using System;
+using System.Collections;
+using UnityEngine.Rendering; // Volume
 
 public class PlayerView : MonoBehaviour
 {
@@ -25,9 +27,24 @@ public class PlayerView : MonoBehaviour
     [Tooltip("Your spectator PP component/Volume (disabled by default, enabled on death). Optional.")]
     public Behaviour spectatorPP;
 
+    [Header("URP Volume Fade (nice transition)")]
+    [Tooltip("Drag your normal URP Volume here (the one currently active while alive).")]
+    public Volume normalVolume;
+
+    [Tooltip("Drag your spectator URP Volume here (the one you want after death).")]
+    public Volume spectatorVolume;
+
+    [Tooltip("How long it takes to fade from normal -> spectator.")]
+    public float volumeFadeDuration = 0.6f;
+
+    [Tooltip("If true, we will also enable spectatorVolume GameObject/Behaviour before fading in.")]
+    public bool forceEnableSpectatorVolume = true;
+
     float xRotation = 0f;
     float currentMouseX, currentMouseY, mouseXVelocity, mouseYVelocity;
     private bool spectatorMode = false;
+
+    private Coroutine fadeRoutine;
 
     void Start()
     {
@@ -37,6 +54,14 @@ public class PlayerView : MonoBehaviour
         // defaults
         if (normalPP != null) normalPP.enabled = true;
         if (spectatorPP != null) spectatorPP.enabled = false;
+
+        // defaults for volumes
+        if (normalVolume != null) normalVolume.weight = 1f;
+        if (spectatorVolume != null)
+        {
+            if (forceEnableSpectatorVolume) spectatorVolume.enabled = true;
+            spectatorVolume.weight = 0f;
+        }
     }
 
     /// <summary>
@@ -44,6 +69,7 @@ public class PlayerView : MonoBehaviour
     /// - Stops rotating the body
     /// - Enables spectator PP by switching the camera's Volume Layer Mask
     /// - Optionally toggles PP components
+    /// - Fades from normalVolume -> spectatorVolume (URP Volume weight)
     /// </summary>
     public void SetSpectatorMode(bool enabled)
     {
@@ -58,13 +84,23 @@ public class PlayerView : MonoBehaviour
             if (normalPP != null) normalPP.enabled = false;
             if (spectatorPP != null) spectatorPP.enabled = true;
 
-            // THIS is the real fix: include spectator PP layer in the camera's volume mask
+            // include spectator PP layer in the camera's volume mask
             ForcePostProcessingLayerOnCamera();
+
+            // fade URP volumes
+            if (fadeRoutine != null) StopCoroutine(fadeRoutine);
+            fadeRoutine = StartCoroutine(FadeToSpectatorVolume());
         }
         else
         {
+            if (fadeRoutine != null) StopCoroutine(fadeRoutine);
+            fadeRoutine = null;
+
             if (normalPP != null) normalPP.enabled = true;
             if (spectatorPP != null) spectatorPP.enabled = false;
+
+            if (normalVolume != null) normalVolume.weight = 1f;
+            if (spectatorVolume != null) spectatorVolume.weight = 0f;
         }
     }
 
@@ -83,6 +119,37 @@ public class PlayerView : MonoBehaviour
 
         if (!spectatorMode && playerBody != null)
             playerBody.Rotate(Vector3.up * currentMouseX * Time.deltaTime);
+    }
+
+    private IEnumerator FadeToSpectatorVolume()
+    {
+        // If they didn't assign volumes, we can't fade weights (still will mask-switch).
+        if (normalVolume == null || spectatorVolume == null)
+            yield break;
+
+        if (forceEnableSpectatorVolume)
+            spectatorVolume.enabled = true;
+
+        float duration = Mathf.Max(0.01f, volumeFadeDuration);
+
+        float startNormal = normalVolume.weight;
+        float startSpec = spectatorVolume.weight;
+
+        // We want: normal -> 0, spectator -> 1
+        float t = 0f;
+        while (t < 1f)
+        {
+            t += Time.deltaTime / duration;
+
+            float lerp = Mathf.Clamp01(t);
+            normalVolume.weight = Mathf.Lerp(startNormal, 0f, lerp);
+            spectatorVolume.weight = Mathf.Lerp(startSpec, 1f, lerp);
+
+            yield return null;
+        }
+
+        normalVolume.weight = 0f;
+        spectatorVolume.weight = 1f;
     }
 
     private void ForcePostProcessingLayerOnCamera()
@@ -129,48 +196,6 @@ public class PlayerView : MonoBehaviour
             }
         }
 
-        // --- PPv2: PostProcessLayer.volumeLayer ---
-        var ppv2Type = Type.GetType(
-            "UnityEngine.Rendering.PostProcessing.PostProcessLayer, Unity.Postprocessing.Runtime"
-        );
-
-        if (ppv2Type != null)
-        {
-            var pp = cam.GetComponent(ppv2Type);
-            if (pp != null)
-            {
-                var prop = ppv2Type.GetProperty("volumeLayer");
-                if (prop != null && prop.PropertyType == typeof(LayerMask))
-                {
-                    LayerMask current = (LayerMask)prop.GetValue(pp);
-
-                    LayerMask next = keepExistingVolumeMask
-                        ? (LayerMask)(current.value | addMask)
-                        : (LayerMask)addMask;
-
-                    prop.SetValue(pp, next);
-
-                    Debug.Log($"[PlayerView] PPv2 volumeLayer now: {next.value} (added {spectatorPostProcessingLayerName})");
-                    return;
-                }
-
-                var field = ppv2Type.GetField("volumeLayer");
-                if (field != null && field.FieldType == typeof(LayerMask))
-                {
-                    LayerMask current = (LayerMask)field.GetValue(pp);
-
-                    LayerMask next = keepExistingVolumeMask
-                        ? (LayerMask)(current.value | addMask)
-                        : (LayerMask)addMask;
-
-                    field.SetValue(pp, next);
-
-                    Debug.Log($"[PlayerView] PPv2 volumeLayer(field) now: {next.value} (added {spectatorPostProcessingLayerName})");
-                    return;
-                }
-            }
-        }
-
-        Debug.LogWarning("[PlayerView] Could not switch PP layer mask (no URP AdditionalCameraData and no PPv2 PostProcessLayer found).");
+        Debug.LogWarning("[PlayerView] Could not switch PP layer mask (URP AdditionalCameraData not found).");
     }
 }
