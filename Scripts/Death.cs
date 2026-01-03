@@ -51,7 +51,7 @@ public class Death : MonoBehaviour
     [Tooltip("How far down we try to find ground.")]
     public float snapDownMaxDistance = 10f;
 
-    [Tooltip("Offset applied AFTER grounding. This is what you will tune live.")]
+    [Tooltip("Offset applied AFTER grounding.")]
     public Vector3 corpseOffsetAfterSnap = new Vector3(0f, 0.02f, 0f);
 
     [Header("Disable scripts")]
@@ -66,27 +66,6 @@ public class Death : MonoBehaviour
     public bool lockCursor = true;
     public bool keepCameraWorldY = true;
 
-    [Header("Live Corpse Tuning (PLAY MODE)")]
-    [Tooltip("Lets you tune corpseOffsetAfterSnap live while spectating, then print it.")]
-    public bool enableLiveTuning = true;
-
-    [Tooltip("Hold LeftAlt for bigger steps.")]
-    public float tuneMoveStep = 0.02f;       // 2cm
-    public float tuneMoveStepFast = 0.10f;   // 10cm
-
-    [Tooltip("Optional: live rotation tuning still available (same as before).")]
-    public float tuneRotStep = 1f;
-    public float tuneRotStepFast = 5f;
-
-    [Tooltip("Press this to print current corpseEulerRotation + corpseOffsetAfterSnap to console.")]
-    public KeyCode printTuningKey = KeyCode.P;
-
-    [Tooltip("Press this to re-ground the corpse (useful after changing offset).")]
-    public KeyCode reSnapKey = KeyCode.N;
-
-    [Tooltip("Rotation keys: J/L yaw, I/K pitch, U/O roll.")]
-    public bool showKeyHelpOnDeath = true;
-
     [Header("Debug")]
     public bool debugLogs = true;
 
@@ -97,13 +76,6 @@ public class Death : MonoBehaviour
     private Collider[] ragdollColliders;
     private Collider[] cylinderColliders;
     private CharacterController cylinderCC;
-
-    // We now tune OFFSET live (not just pushing the model around blindly)
-    private Vector3 liveOffsetDelta = Vector3.zero;
-    private Vector3 liveRotDeltaEuler = Vector3.zero;
-
-    private bool spectatorActive = false;
-    private bool corpseReadyForTuning = false;
 
     private void Awake()
     {
@@ -160,114 +132,12 @@ public class Death : MonoBehaviour
         // Proper grounding using the lowest collider point
         GroundCorpseNow();
 
-        // Now we can tune offset live while spectating
-        corpseReadyForTuning = true;
-
         // spectator after spectatorDelay
         if (spectatorDelay > 0f)
             yield return new WaitForSeconds(spectatorDelay);
 
         ForceAllToSpectatorLayer();
         EnterSpectator();
-
-        spectatorActive = true;
-
-        if (showKeyHelpOnDeath && enableLiveTuning)
-        {
-            Log("LIVE CORPSE OFFSET TUNING (while spectating):");
-            Log("Adjust OFFSET:  T/G = +Y/-Y,  H/F = +X/-X,  R/Y = +Z/-Z (Hold LeftAlt for fast)");
-            Log("Re-snap corpse to ground: N");
-            Log("Print values to copy into Inspector: P");
-            Log("Optional rotation tuning: I/K pitch, J/L yaw, U/O roll");
-        }
-    }
-
-    private void Update()
-    {
-        if (!enableLiveTuning) return;
-        if (!spectatorActive) return;
-        if (!corpseReadyForTuning) return;
-        if (modelRoot == null) return;
-
-        float moveStep = Input.GetKey(KeyCode.LeftAlt) ? tuneMoveStepFast : tuneMoveStep;
-        float rotStep = Input.GetKey(KeyCode.LeftAlt) ? tuneRotStepFast : tuneRotStep;
-
-        bool offsetChanged = false;
-        bool rotChanged = false;
-
-        // ---- OFFSET (THIS is what you wanted) ----
-        if (Input.GetKey(KeyCode.T)) { liveOffsetDelta += Vector3.up * moveStep; offsetChanged = true; }
-        if (Input.GetKey(KeyCode.G)) { liveOffsetDelta += Vector3.down * moveStep; offsetChanged = true; }
-
-        if (Input.GetKey(KeyCode.H)) { liveOffsetDelta += Vector3.right * moveStep; offsetChanged = true; } // +X
-        if (Input.GetKey(KeyCode.F)) { liveOffsetDelta += Vector3.left * moveStep; offsetChanged = true; }  // -X
-
-        if (Input.GetKey(KeyCode.R)) { liveOffsetDelta += Vector3.forward * moveStep; offsetChanged = true; } // +Z
-        if (Input.GetKey(KeyCode.Y)) { liveOffsetDelta += Vector3.back * moveStep; offsetChanged = true; }    // -Z
-
-        // ---- OPTIONAL ROTATION tuning (kept from your existing system) ----
-        if (Input.GetKey(KeyCode.I)) { liveRotDeltaEuler.x += rotStep; rotChanged = true; }
-        if (Input.GetKey(KeyCode.K)) { liveRotDeltaEuler.x -= rotStep; rotChanged = true; }
-        if (Input.GetKey(KeyCode.L)) { liveRotDeltaEuler.y += rotStep; rotChanged = true; }
-        if (Input.GetKey(KeyCode.J)) { liveRotDeltaEuler.y -= rotStep; rotChanged = true; }
-        if (Input.GetKey(KeyCode.O)) { liveRotDeltaEuler.z += rotStep; rotChanged = true; }
-        if (Input.GetKey(KeyCode.U)) { liveRotDeltaEuler.z -= rotStep; rotChanged = true; }
-
-        if (offsetChanged || rotChanged)
-        {
-            ApplyLiveTuning(offsetChanged, rotChanged);
-        }
-
-        if (Input.GetKeyDown(reSnapKey))
-        {
-            GroundCorpseNow();
-            Log("Re-snapped corpse to ground.");
-        }
-
-        if (Input.GetKeyDown(printTuningKey))
-        {
-            PrintTuningValues();
-        }
-    }
-
-    private void ApplyLiveTuning(bool offsetChanged, bool rotChanged)
-    {
-        // We tune the OFFSET value (so you can copy it back easily)
-        if (offsetChanged)
-        {
-            corpseOffsetAfterSnap += liveOffsetDelta;
-            liveOffsetDelta = Vector3.zero;
-
-            // Re-ground using new offset so result is consistent
-            GroundCorpseNow();
-        }
-
-        if (rotChanged)
-        {
-            if (ragdollHips != null)
-            {
-                ragdollHips.rotation = Quaternion.Euler(ragdollHips.rotation.eulerAngles + liveRotDeltaEuler);
-            }
-            else
-            {
-                modelRoot.rotation = Quaternion.Euler(modelRoot.rotation.eulerAngles + liveRotDeltaEuler);
-            }
-            liveRotDeltaEuler = Vector3.zero;
-        }
-    }
-
-    private void PrintTuningValues()
-    {
-        Vector3 rot = corpseEulerRotation;
-        if (ragdollHips != null)
-            rot = ragdollHips.rotation.eulerAngles;
-
-        Vector3 pos = corpseOffsetAfterSnap;
-
-        Log("---- COPY THESE INTO INSPECTOR ----");
-        Log($"corpseEulerRotation = new Vector3({rot.x:F2}f, {rot.y:F2}f, {rot.z:F2}f)");
-        Log($"corpseOffsetAfterSnap = new Vector3({pos.x:F4}f, {pos.y:F4}f, {pos.z:F4}f)");
-        Log("-----------------------------------");
     }
 
     private void EnsureRuntimeReferences()
