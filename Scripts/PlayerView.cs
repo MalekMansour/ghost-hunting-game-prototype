@@ -1,6 +1,4 @@
 using UnityEngine;
-using System;
-using System.Reflection;
 
 public class PlayerView : MonoBehaviour
 {
@@ -12,9 +10,12 @@ public class PlayerView : MonoBehaviour
     public float maxLookUp = 90f;
     public float maxLookDown = -40f;
 
-    [Header("Post Processing Layer Switch")]
-    [Tooltip("Layer that spectator post processing volumes are on.")]
-    public string spectatorPostProcessingLayerName = "SpectatorPostProcessing";
+    [Header("Post Processing (Toggle Components)")]
+    [Tooltip("Your normal post processing component (enabled while alive).")]
+    public Behaviour NormalPP;
+
+    [Tooltip("Your spectator post processing component (disabled by default, enabled when dead).")]
+    public Behaviour SpectatorPP;
 
     float xRotation = 0f;
 
@@ -29,24 +30,29 @@ public class PlayerView : MonoBehaviour
     {
         UnityEngine.Cursor.lockState = CursorLockMode.Locked;
         UnityEngine.Cursor.visible = false;
+
+        // ensure defaults
+        if (NormalPP != null) NormalPP.enabled = true;
+        if (SpectatorPP != null) SpectatorPP.enabled = false;
     }
 
-    /// <summary>
-    /// Called by Death when spectator starts.
-    /// - Stops rotating the player body
-    /// - Switches post processing volume mask to spectator layer
-    /// </summary>
     public void SetSpectatorMode(bool enabled)
     {
         spectatorMode = enabled;
 
         if (spectatorMode)
         {
-            // camera no longer controls the body
+            // camera no longer controls body rotation
             playerBody = null;
 
-            // switch post processing
-            SwitchCameraPostProcessingLayer();
+            // toggle PP
+            if (NormalPP != null) NormalPP.enabled = false;
+            if (SpectatorPP != null) SpectatorPP.enabled = true;
+        }
+        else
+        {
+            if (NormalPP != null) NormalPP.enabled = true;
+            if (SpectatorPP != null) SpectatorPP.enabled = false;
         }
     }
 
@@ -63,69 +69,9 @@ public class PlayerView : MonoBehaviour
 
         transform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
 
-        // Only rotate player body if NOT in spectator
         if (!spectatorMode && playerBody != null)
         {
             playerBody.Rotate(Vector3.up * currentMouseX * Time.deltaTime);
         }
-    }
-
-    private void SwitchCameraPostProcessingLayer()
-    {
-        Camera cam = GetComponent<Camera>();
-        if (cam == null) return;
-
-        int toLayer = LayerMask.NameToLayer(spectatorPostProcessingLayerName);
-        if (toLayer < 0)
-        {
-            Debug.LogWarning($"[PlayerView] Layer '{spectatorPostProcessingLayerName}' not found. Create it.");
-            return;
-        }
-
-        int spectatorMask = (1 << toLayer);
-
-        // URP: UniversalAdditionalCameraData.volumeLayerMask
-        Type urpType = Type.GetType("UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime");
-        if (urpType != null)
-        {
-            var urp = cam.GetComponent(urpType);
-            if (urp != null)
-            {
-                var prop = urpType.GetProperty("volumeLayerMask");
-                if (prop != null && prop.PropertyType == typeof(LayerMask))
-                {
-                    prop.SetValue(urp, (LayerMask)spectatorMask);
-                    Debug.Log($"[PlayerView] URP volumeLayerMask -> '{spectatorPostProcessingLayerName}'");
-                    return;
-                }
-            }
-        }
-
-        // PPv2: PostProcessLayer.volumeLayer
-        Type ppv2Type = Type.GetType("UnityEngine.Rendering.PostProcessing.PostProcessLayer, Unity.Postprocessing.Runtime");
-        if (ppv2Type != null)
-        {
-            var pp = cam.GetComponent(ppv2Type);
-            if (pp != null)
-            {
-                var prop = ppv2Type.GetProperty("volumeLayer");
-                if (prop != null && prop.PropertyType == typeof(LayerMask))
-                {
-                    prop.SetValue(pp, (LayerMask)spectatorMask);
-                    Debug.Log($"[PlayerView] PPv2 volumeLayer -> '{spectatorPostProcessingLayerName}'");
-                    return;
-                }
-
-                var field = ppv2Type.GetField("volumeLayer");
-                if (field != null && field.FieldType == typeof(LayerMask))
-                {
-                    field.SetValue(pp, (LayerMask)spectatorMask);
-                    Debug.Log($"[PlayerView] PPv2 volumeLayer(field) -> '{spectatorPostProcessingLayerName}'");
-                    return;
-                }
-            }
-        }
-
-        Debug.LogWarning("[PlayerView] No post-processing component found to switch (URP AdditionalCameraData or PPv2 PostProcessLayer).");
     }
 }
