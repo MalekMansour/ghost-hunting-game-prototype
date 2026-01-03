@@ -36,6 +36,9 @@ public class Death : MonoBehaviour
     public bool detachModelOnRagdoll = true;
     public bool disableCylinderCharacterControllerOnRagdoll = true;
 
+    [Tooltip("Fixes the 'corpse becomes tiny' issue by preserving world scale when detaching.")]
+    public bool preserveWorldScaleOnDetach = true;
+
     public enum CorpseRotationMode { None, UseEuler }
     [Header("Corpse Base Rotation (Inspector)")]
     public CorpseRotationMode corpseRotationMode = CorpseRotationMode.None;
@@ -51,7 +54,7 @@ public class Death : MonoBehaviour
     [Tooltip("How far down we try to find ground.")]
     public float snapDownMaxDistance = 10f;
 
-    [Tooltip("Offset applied AFTER grounding. (IMPORTANT: Now applies even if grounding raycast fails.)")]
+    [Tooltip("Offset applied AFTER grounding. (IMPORTANT: Applies even if grounding raycast fails.)")]
     public Vector3 corpseOffsetAfterSnap = new Vector3(0f, 0.02f, 0f);
 
     [Header("Disable scripts")]
@@ -183,8 +186,24 @@ public class Death : MonoBehaviour
             return;
         }
 
+        // --- KEY FIX: preserve world scale when detaching ---
         if (detachModelOnRagdoll && modelRoot.parent != null)
-            modelRoot.SetParent(null, true);
+        {
+            if (preserveWorldScaleOnDetach)
+            {
+                // Store the visible (world) scale before detaching
+                Vector3 worldScale = modelRoot.lossyScale;
+
+                modelRoot.SetParent(null, true);
+
+                // After detaching, localScale should match the old world scale (fixes tiny corpse)
+                modelRoot.localScale = worldScale;
+            }
+            else
+            {
+                modelRoot.SetParent(null, true);
+            }
+        }
 
         // Stop animator so it doesn't fight ragdoll
         if (animator != null) animator.enabled = false;
@@ -235,7 +254,7 @@ public class Death : MonoBehaviour
     /// <summary>
     /// Grounds the corpse by finding the LOWEST ragdoll collider (bounds.min.y),
     /// attempts multiple raycast origins, and ALWAYS applies corpseOffsetAfterSnap
-    /// even if raycasts miss (so your offset actually works).
+    /// even if raycasts miss (so your offset always does something).
     /// </summary>
     private void GroundCorpseNow()
     {
@@ -246,7 +265,7 @@ public class Death : MonoBehaviour
             return;
         }
 
-        // Find lowest Y among ragdoll collider bounds
+        // Find lowest Y among ragdoll collider bounds + build combined bounds
         float lowestY = float.PositiveInfinity;
         Bounds combined = new Bounds(modelRoot.position, Vector3.zero);
         bool haveBounds = false;
@@ -271,17 +290,16 @@ public class Death : MonoBehaviour
 
         bool grounded = false;
 
-        if (!float.IsInfinity(lowestY))
+        if (!float.IsInfinity(lowestY) && haveBounds)
         {
-            // Try raycasts from a few good origins (center + bounds corners + hips)
             Vector3[] origins = new Vector3[]
             {
-                new Vector3(combined.center.x, combined.max.y + 0.5f, combined.center.z),
-                new Vector3(combined.min.x, combined.max.y + 0.5f, combined.min.z),
-                new Vector3(combined.max.x, combined.max.y + 0.5f, combined.max.z),
-                new Vector3(combined.min.x, combined.max.y + 0.5f, combined.max.z),
-                new Vector3(combined.max.x, combined.max.y + 0.5f, combined.min.z),
-                (ragdollHips != null ? ragdollHips.position + Vector3.up * 1.0f : modelRoot.position + Vector3.up * 1.0f)
+                new Vector3(combined.center.x, combined.max.y + 0.75f, combined.center.z),
+                new Vector3(combined.min.x,    combined.max.y + 0.75f, combined.min.z),
+                new Vector3(combined.max.x,    combined.max.y + 0.75f, combined.max.z),
+                new Vector3(combined.min.x,    combined.max.y + 0.75f, combined.max.z),
+                new Vector3(combined.max.x,    combined.max.y + 0.75f, combined.min.z),
+                (ragdollHips != null ? ragdollHips.position + Vector3.up * 1.0f : modelRoot.position + Vector3.up * 1.0f),
             };
 
             RaycastHit hit;
@@ -299,13 +317,14 @@ public class Death : MonoBehaviour
             }
         }
 
-        // IMPORTANT: Apply offset REGARDLESS of grounded success.
+        // ALWAYS apply offset (this is what makes -50 actually move)
         modelRoot.position += corpseOffsetAfterSnap;
 
         if (debugLogs)
         {
             Log($"GroundCorpseNow: grounded={grounded}, applied corpseOffsetAfterSnap={corpseOffsetAfterSnap}");
-            Log($"TIP: If grounded=false, your corpseGroundMask doesn't include the floor OR the floor has no collider.");
+            if (!grounded)
+                Log("TIP: grounded=false means corpseGroundMask likely doesn't include your floor layer OR your floor has no collider.");
         }
     }
 
@@ -346,7 +365,7 @@ public class Death : MonoBehaviour
         // Disable flashlight FOREVER once dead (on camera or children)
         DisableFlashlightForever(mainCamera);
 
-        // Switch PP + stop body rotation (and do PP fade if you add it in PlayerView)
+        // Switch PP + stop body rotation (PlayerView handles URP Volume fade)
         var pv = mainCamera.GetComponent<PlayerView>();
         if (pv != null)
             pv.SetSpectatorMode(true);
@@ -399,12 +418,12 @@ public class Death : MonoBehaviour
     {
         if (cam == null) return;
 
-        // If your flashlight is just a Light on the camera:
+        // If your flashlight is a Light component on the camera or children:
         var lights = cam.GetComponentsInChildren<Light>(true);
         foreach (var l in lights)
             l.enabled = false;
 
-        // If you have a script named "Flashlight" (your own script)
+        // If you have a script named "Flashlight"
         var behaviours = cam.GetComponentsInChildren<MonoBehaviour>(true);
         foreach (var b in behaviours)
         {
@@ -477,3 +496,4 @@ public class SpectatorController : MonoBehaviour
         }
     }
 }
+
