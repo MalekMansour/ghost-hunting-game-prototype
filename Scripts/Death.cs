@@ -4,33 +4,30 @@ using System.Collections;
 public class Death : MonoBehaviour
 {
     [Header("References")]
-    [Tooltip("Your PLAYER CYLINDER (scripts live here). If empty, uses transform.root.")]
     public GameObject playerCylinder;
-
-    [Tooltip("Animator on model. Leave empty: auto-find at death time.")]
     public Animator animator;
-
-    [Tooltip("Model root where ragdoll bones exist. Leave empty: uses animator.transform.")]
     public Transform modelRoot;
-
-    [Tooltip("Optional: hips/pelvis bone (best for rotation + ground snapping). Drag in Inspector.")]
     public Transform ragdollHips;
-
-    public AudioSource audioSource;
     public Camera mainCamera;
+    public AudioSource audioSource;
 
-    [Header("Death Animator Parameter")]
+    [Header("Animator")]
     public string dieParamName = "Die";
     public enum DieParamMode { Trigger, Bool }
     public DieParamMode dieParamMode = DieParamMode.Trigger;
     public bool dieBoolValue = true;
 
     [Header("Timing")]
+    [Tooltip("Spectator starts after this many seconds (animation/sound still start instantly).")]
     public float spectatorDelay = 3f;
-    public float ragdollDelay = 0.75f;
 
-    [Header("Audio")]
+    [Tooltip("0 = ragdoll instantly. Increase if you want the animation to play first.")]
+    public float ragdollDelay = 0f;
+
+    [Header("Death Sound")]
     public AudioClip deathClip;
+    [Range(0f, 1f)]
+    public float deathSoundVolume = 0.7f;
 
     [Header("Layers")]
     public string spectatorLayerName = "Spectator";
@@ -39,52 +36,63 @@ public class Death : MonoBehaviour
     public bool detachModelOnRagdoll = true;
     public bool disableCylinderCharacterControllerOnRagdoll = true;
 
-    public enum CorpseRotationMode { None, UseEuler, UseTransform }
-    [Header("Corpse Rotation")]
+    public enum CorpseRotationMode { None, UseEuler }
+    [Header("Corpse Base Rotation (Inspector)")]
     public CorpseRotationMode corpseRotationMode = CorpseRotationMode.None;
     public Vector3 corpseEulerRotation = new Vector3(90f, 0f, 0f);
-    public Transform corpseRotationReference;
 
-    [Tooltip("Prevents physics from standing the hips back upright (optional).")]
-    public bool lockHipsRotationXZ = true;
-
-    public enum CorpsePositionMode { None, SnapToGround, SnapToGroundAndOffset }
-    [Header("Corpse Position (Fix floating)")]
-    public CorpsePositionMode corpsePositionMode = CorpsePositionMode.SnapToGround;
-
-    [Tooltip("What counts as ground (Default/Environment/etc).")]
+    public enum CorpsePositionMode { None, SnapToGroundAndOffset }
+    [Header("Corpse Base Position (Inspector)")]
+    public CorpsePositionMode corpsePositionMode = CorpsePositionMode.SnapToGroundAndOffset;
     public LayerMask corpseGroundMask = ~0;
-
-    [Tooltip("Max distance to snap down to ground.")]
     public float snapDownMaxDistance = 3f;
-
-    [Tooltip("Extra offset applied after snapping (use small values like Y = 0.02).")]
-    public Vector3 corpseLocalOffset = new Vector3(0f, 0.02f, 0f);
+    public Vector3 corpseOffsetAfterSnap = new Vector3(0f, 0.02f, 0f);
 
     [Header("Disable scripts")]
     public bool disableAllScriptsOnCylinder = true;
 
-    [Header("Spectator Movement")]
+    [Header("Spectator")]
     public float spectatorControllerHeight = 1.8f;
     public float spectatorControllerRadius = 0.35f;
     public float spectatorMoveSpeed = 5f;
     public float spectatorSprintMultiplier = 1.75f;
     public float spectatorLookSensitivity = 2.2f;
     public bool lockCursor = true;
-
-    [Header("Spectator Camera")]
     public bool keepCameraWorldY = true;
+
+    [Header("Live Corpse Tuning (PLAY MODE)")]
+    public bool enableLiveTuning = true;
+
+    [Tooltip("Hold LeftAlt to use 'fast' tuning speed.")]
+    public float tuneMoveStep = 0.01f;
+    public float tuneMoveStepFast = 0.05f;
+
+    [Tooltip("Hold LeftAlt to use 'fast' tuning rotation.")]
+    public float tuneRotStep = 1f;
+    public float tuneRotStepFast = 5f;
+
+    [Tooltip("Press this to print final tuning values to console.")]
+    public KeyCode printTuningKey = KeyCode.P;
+
+    [Tooltip("Rotation keys: J/L yaw, I/K pitch, U/O roll.")]
+    public bool showKeyHelpOnDeath = true;
 
     [Header("Debug")]
     public bool debugLogs = true;
 
-    private bool deadStarted;
+    private bool deadStarted = false;
+    private bool soundPlayed = false;
 
     private Rigidbody[] ragdollBodies;
     private Collider[] ragdollColliders;
-
     private Collider[] cylinderColliders;
     private CharacterController cylinderCC;
+
+    // runtime tuning deltas (so you can copy them back)
+    private Vector3 runtimePosDelta = Vector3.zero;
+    private Vector3 runtimeRotDeltaEuler = Vector3.zero;
+
+    private bool spectatorActive = false;
 
     private void Awake()
     {
@@ -110,7 +118,7 @@ public class Death : MonoBehaviour
             yield break;
         }
 
-        // trigger death animation
+        // Animation starts immediately (no delay)
         animator.enabled = true;
         animator.speed = 1f;
 
@@ -124,25 +132,112 @@ public class Death : MonoBehaviour
             animator.SetBool(dieParamName, dieBoolValue);
         }
 
-        if (audioSource != null && deathClip != null)
-            audioSource.PlayOneShot(deathClip);
+        // Sound starts immediately (no delay) — and ONLY ONCE
+        PlayDeathSoundOnce();
 
+        // Ragdoll timing (you requested no delay -> default ragdollDelay = 0)
         if (ragdollDelay > 0f)
             yield return new WaitForSeconds(ragdollDelay);
 
         EnableRagdoll();
 
-        // rotate corpse (optional) then snap it to floor (fix floating)
-        ApplyCorpseRotation();
-        yield return null; // one frame so physics updates
-        SnapCorpseToGround();
+        // Apply base rotation/position once (then you can fine-tune live)
+        ApplyBaseCorpseRotation();
+        yield return null; // one frame
+        ApplyBaseCorpseSnap();
 
-        float remaining = Mathf.Max(0f, spectatorDelay - ragdollDelay);
-        if (remaining > 0f)
-            yield return new WaitForSeconds(remaining);
+        // spectator after spectatorDelay (animation/sound already started instantly)
+        if (spectatorDelay > 0f)
+            yield return new WaitForSeconds(spectatorDelay);
 
         ForceAllToSpectatorLayer();
         EnterSpectator();
+
+        spectatorActive = true;
+
+        if (showKeyHelpOnDeath && enableLiveTuning)
+        {
+            Log("LIVE TUNING KEYS (while spectating):");
+            Log("Move:  T/G = +Y/-Y,  F/H = -X/+X,  R/Y = +Z/-Z");
+            Log("Rotate: I/K pitch, J/L yaw, U/O roll. Hold LeftAlt for fast.");
+            Log("Press P to print the final values you should copy into Inspector.");
+        }
+    }
+
+    private void Update()
+    {
+        if (!enableLiveTuning) return;
+        if (!spectatorActive) return;
+
+        // Only tune if we have a model root
+        if (modelRoot == null) return;
+
+        float moveStep = Input.GetKey(KeyCode.LeftAlt) ? tuneMoveStepFast : tuneMoveStep;
+        float rotStep = Input.GetKey(KeyCode.LeftAlt) ? tuneRotStepFast : tuneRotStep;
+
+        bool changed = false;
+
+        // POSITION: (local-ish in world axes for simplicity)
+        if (Input.GetKey(KeyCode.T)) { runtimePosDelta += Vector3.up * moveStep; changed = true; }
+        if (Input.GetKey(KeyCode.G)) { runtimePosDelta += Vector3.down * moveStep; changed = true; }
+
+        if (Input.GetKey(KeyCode.H)) { runtimePosDelta += Vector3.right * moveStep; changed = true; } // +X
+        if (Input.GetKey(KeyCode.F)) { runtimePosDelta += Vector3.left * moveStep; changed = true; }  // -X
+
+        if (Input.GetKey(KeyCode.R)) { runtimePosDelta += Vector3.forward * moveStep; changed = true; } // +Z
+        if (Input.GetKey(KeyCode.Y)) { runtimePosDelta += Vector3.back * moveStep; changed = true; }    // -Z
+
+        // ROTATION:
+        if (Input.GetKey(KeyCode.I)) { runtimeRotDeltaEuler.x += rotStep; changed = true; } // pitch +
+        if (Input.GetKey(KeyCode.K)) { runtimeRotDeltaEuler.x -= rotStep; changed = true; } // pitch -
+        if (Input.GetKey(KeyCode.L)) { runtimeRotDeltaEuler.y += rotStep; changed = true; } // yaw +
+        if (Input.GetKey(KeyCode.J)) { runtimeRotDeltaEuler.y -= rotStep; changed = true; } // yaw -
+        if (Input.GetKey(KeyCode.O)) { runtimeRotDeltaEuler.z += rotStep; changed = true; } // roll +
+        if (Input.GetKey(KeyCode.U)) { runtimeRotDeltaEuler.z -= rotStep; changed = true; } // roll -
+
+        if (changed)
+        {
+            ApplyRuntimeTuning();
+        }
+
+        if (Input.GetKeyDown(printTuningKey))
+        {
+            PrintTuningValues();
+        }
+    }
+
+    private void ApplyRuntimeTuning()
+    {
+        // apply to modelRoot (and hips rotation if provided)
+        modelRoot.position += runtimePosDelta;
+        runtimePosDelta = Vector3.zero;
+
+        if (ragdollHips != null)
+        {
+            ragdollHips.rotation = Quaternion.Euler(ragdollHips.rotation.eulerAngles + runtimeRotDeltaEuler);
+        }
+        else
+        {
+            modelRoot.rotation = Quaternion.Euler(modelRoot.rotation.eulerAngles + runtimeRotDeltaEuler);
+        }
+        runtimeRotDeltaEuler = Vector3.zero;
+    }
+
+    private void PrintTuningValues()
+    {
+        // Tell you what to copy into inspector:
+        // - corpseEulerRotation
+        // - corpseOffsetAfterSnap
+        Vector3 rot = corpseEulerRotation;
+        if (ragdollHips != null)
+            rot = ragdollHips.rotation.eulerAngles;
+
+        Vector3 pos = corpseOffsetAfterSnap;
+
+        Log("---- COPY THESE INTO INSPECTOR ----");
+        Log($"corpseEulerRotation = new Vector3({rot.x:F2}f, {rot.y:F2}f, {rot.z:F2}f)");
+        Log($"corpseOffsetAfterSnap = new Vector3({pos.x:F4}f, {pos.y:F4}f, {pos.z:F4}f)");
+        Log("-----------------------------------");
     }
 
     private void EnsureRuntimeReferences()
@@ -169,26 +264,37 @@ public class Death : MonoBehaviour
         }
     }
 
+    private void PlayDeathSoundOnce()
+    {
+        if (soundPlayed) return;
+        soundPlayed = true;
+
+        if (audioSource != null && deathClip != null)
+        {
+            audioSource.PlayOneShot(deathClip, deathSoundVolume);
+        }
+    }
+
     private void EnableRagdoll()
     {
         if (modelRoot == null || ragdollBodies == null || ragdollBodies.Length == 0)
         {
-            Log("Ragdoll FAILED: no rigidbodies under modelRoot. (Need ragdoll rig.)");
+            Log("Ragdoll FAILED: no rigidbodies under modelRoot (need ragdoll rig).");
             return;
         }
 
         if (detachModelOnRagdoll && modelRoot.parent != null)
             modelRoot.SetParent(null, true);
 
-        // stop animator so it doesn't fight ragdoll
-        animator.enabled = false;
+        // Stop animator so it doesn't fight ragdoll
+        if (animator != null) animator.enabled = false;
 
         if (disableCylinderCharacterControllerOnRagdoll && cylinderCC != null)
             cylinderCC.enabled = false;
 
         SetRagdollState(true);
 
-        // disable cylinder colliders that aren't part of model
+        // Disable cylinder colliders that aren't part of the model
         if (cylinderColliders != null && modelRoot != null)
         {
             foreach (var c in cylinderColliders)
@@ -216,37 +322,19 @@ public class Death : MonoBehaviour
         }
     }
 
-    private void ApplyCorpseRotation()
+    private void ApplyBaseCorpseRotation()
     {
         if (corpseRotationMode == CorpseRotationMode.None) return;
 
         Transform target = ragdollHips != null ? ragdollHips : modelRoot;
         if (target == null) return;
 
-        if (corpseRotationMode == CorpseRotationMode.UseEuler)
-        {
-            target.rotation = Quaternion.Euler(corpseEulerRotation);
-        }
-        else if (corpseRotationMode == CorpseRotationMode.UseTransform && corpseRotationReference != null)
-        {
-            target.rotation = corpseRotationReference.rotation;
-        }
-
-        if (lockHipsRotationXZ && ragdollHips != null)
-        {
-            var hipsRb = ragdollHips.GetComponent<Rigidbody>();
-            if (hipsRb != null)
-            {
-                hipsRb.constraints |= RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
-            }
-        }
+        target.rotation = Quaternion.Euler(corpseEulerRotation);
     }
 
-    private void SnapCorpseToGround()
+    private void ApplyBaseCorpseSnap()
     {
         if (corpsePositionMode == CorpsePositionMode.None) return;
-
-        // We snap the entire modelRoot down based on a raycast from the hips (or model root)
         if (modelRoot == null) return;
 
         Transform probe = ragdollHips != null ? ragdollHips : modelRoot;
@@ -254,22 +342,9 @@ public class Death : MonoBehaviour
         Vector3 origin = probe.position + Vector3.up * 0.5f;
         if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, snapDownMaxDistance + 0.5f, corpseGroundMask, QueryTriggerInteraction.Ignore))
         {
-            // Move modelRoot down so the probe sits on the hit point (plus small offset)
             float deltaY = probe.position.y - hit.point.y;
-
-            // push model down
             modelRoot.position -= new Vector3(0f, deltaY, 0f);
-
-            if (corpsePositionMode == CorpsePositionMode.SnapToGroundAndOffset)
-                modelRoot.position += corpseLocalOffset;
-
-            // also zero out velocities a bit so it settles
-            foreach (var rb in ragdollBodies)
-            {
-                if (rb == null) continue;
-                rb.velocity *= 0.1f;
-                rb.angularVelocity *= 0.1f;
-            }
+            modelRoot.position += corpseOffsetAfterSnap;
         }
     }
 
@@ -302,17 +377,17 @@ public class Death : MonoBehaviour
     {
         if (mainCamera == null) return;
 
-        // camera should SEE the corpse on Spectator layer
+        // Make sure camera can see spectator layer (corpse)
         int specLayer = LayerMask.NameToLayer(spectatorLayerName);
         if (specLayer >= 0)
             mainCamera.cullingMask |= (1 << specLayer);
 
-        // tell PlayerView to switch PP + stop rotating body
+        // Switch PP + stop body rotation
         var pv = mainCamera.GetComponent<PlayerView>();
         if (pv != null)
             pv.SetSpectatorMode(true);
 
-        // disable all scripts on cylinder (movement etc.)
+        // Disable all scripts on cylinder (movement, interaction, etc.)
         if (disableAllScriptsOnCylinder && playerCylinder != null)
         {
             var all = playerCylinder.GetComponents<MonoBehaviour>();
@@ -324,7 +399,7 @@ public class Death : MonoBehaviour
             }
         }
 
-        // detach camera to spectator controller
+        // Detach camera and create spectator controller
         Transform camT = mainCamera.transform;
         Vector3 camWorldPos = camT.position;
         Quaternion camWorldRot = camT.rotation;
