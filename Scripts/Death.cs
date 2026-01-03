@@ -4,16 +4,16 @@ using System.Collections;
 public class Death : MonoBehaviour
 {
     [Header("References")]
-    [Tooltip("Drag your PLAYER CYLINDER here. If empty, uses transform.root.")]
+    [Tooltip("Your PLAYER CYLINDER (scripts live here). If empty, uses transform.root.")]
     public GameObject playerCylinder;
 
-    [Tooltip("Animator on the model. Leave empty: will auto-find at death time.")]
+    [Tooltip("Animator on model. Leave empty: auto-find at death time.")]
     public Animator animator;
 
-    [Tooltip("Root transform of the model (where ragdoll bones live). Leave empty: will use animator.transform.")]
+    [Tooltip("Model root where ragdoll bones exist. Leave empty: uses animator.transform.")]
     public Transform modelRoot;
 
-    [Tooltip("If set, this is the main ragdoll bone to rotate (usually Hips/Pelvis). Drag it in Inspector.")]
+    [Tooltip("Optional: hips/pelvis bone (best for rotation + ground snapping). Drag in Inspector.")]
     public Transform ragdollHips;
 
     public AudioSource audioSource;
@@ -35,26 +35,34 @@ public class Death : MonoBehaviour
     [Header("Layers")]
     public string spectatorLayerName = "Spectator";
 
-    [Header("Ragdoll Settings")]
+    [Header("Ragdoll")]
     public bool detachModelOnRagdoll = true;
     public bool disableCylinderCharacterControllerOnRagdoll = true;
 
     public enum CorpseRotationMode { None, UseEuler, UseTransform }
-    [Header("Corpse Rotation (Inspector Pick)")]
+    [Header("Corpse Rotation")]
     public CorpseRotationMode corpseRotationMode = CorpseRotationMode.None;
-
-    [Tooltip("If UseEuler: set the corpse rotation here (try X=90 or X=-90 depending on rig).")]
     public Vector3 corpseEulerRotation = new Vector3(90f, 0f, 0f);
-
-    [Tooltip("If UseTransform: drag a reference Transform whose rotation you want to copy.")]
     public Transform corpseRotationReference;
 
-    [Tooltip("If true, we 'lock' hips rotation right after applying corpse rotation so physics won't stand it back up.")]
-    public bool lockHipsRotationAfterApply = true;
+    [Tooltip("Prevents physics from standing the hips back upright (optional).")]
+    public bool lockHipsRotationXZ = true;
+
+    public enum CorpsePositionMode { None, SnapToGround, SnapToGroundAndOffset }
+    [Header("Corpse Position (Fix floating)")]
+    public CorpsePositionMode corpsePositionMode = CorpsePositionMode.SnapToGround;
+
+    [Tooltip("What counts as ground (Default/Environment/etc).")]
+    public LayerMask corpseGroundMask = ~0;
+
+    [Tooltip("Max distance to snap down to ground.")]
+    public float snapDownMaxDistance = 3f;
+
+    [Tooltip("Extra offset applied after snapping (use small values like Y = 0.02).")]
+    public Vector3 corpseLocalOffset = new Vector3(0f, 0.02f, 0f);
 
     [Header("Disable scripts")]
     public bool disableAllScriptsOnCylinder = true;
-    public bool disableAllCameraScripts = false; // now PlayerView handles spectator mode instead
 
     [Header("Spectator Movement")]
     public float spectatorControllerHeight = 1.8f;
@@ -102,7 +110,7 @@ public class Death : MonoBehaviour
             yield break;
         }
 
-        // Trigger death animation
+        // trigger death animation
         animator.enabled = true;
         animator.speed = 1f;
 
@@ -124,8 +132,10 @@ public class Death : MonoBehaviour
 
         EnableRagdoll();
 
-        // Apply your chosen corpse rotation (Inspector)
+        // rotate corpse (optional) then snap it to floor (fix floating)
         ApplyCorpseRotation();
+        yield return null; // one frame so physics updates
+        SnapCorpseToGround();
 
         float remaining = Mathf.Max(0f, spectatorDelay - ragdollDelay);
         if (remaining > 0f)
@@ -163,18 +173,14 @@ public class Death : MonoBehaviour
     {
         if (modelRoot == null || ragdollBodies == null || ragdollBodies.Length == 0)
         {
-            Log("Ragdoll FAILED: no rigidbodies under modelRoot.");
+            Log("Ragdoll FAILED: no rigidbodies under modelRoot. (Need ragdoll rig.)");
             return;
         }
 
-        // Detach model from cylinder so root transform doesn't keep it upright
         if (detachModelOnRagdoll && modelRoot.parent != null)
-        {
             modelRoot.SetParent(null, true);
-            Log("Model detached for ragdoll.");
-        }
 
-        // Stop animator so it doesn't fight physics
+        // stop animator so it doesn't fight ragdoll
         animator.enabled = false;
 
         if (disableCylinderCharacterControllerOnRagdoll && cylinderCC != null)
@@ -182,7 +188,7 @@ public class Death : MonoBehaviour
 
         SetRagdollState(true);
 
-        // Disable cylinder colliders that aren't part of the model
+        // disable cylinder colliders that aren't part of model
         if (cylinderColliders != null && modelRoot != null)
         {
             foreach (var c in cylinderColliders)
@@ -217,26 +223,52 @@ public class Death : MonoBehaviour
         Transform target = ragdollHips != null ? ragdollHips : modelRoot;
         if (target == null) return;
 
-        // apply rotation
         if (corpseRotationMode == CorpseRotationMode.UseEuler)
         {
             target.rotation = Quaternion.Euler(corpseEulerRotation);
-            Log($"Applied corpse euler rotation: {corpseEulerRotation}");
         }
         else if (corpseRotationMode == CorpseRotationMode.UseTransform && corpseRotationReference != null)
         {
             target.rotation = corpseRotationReference.rotation;
-            Log("Applied corpse transform rotation reference.");
         }
 
-        // Optional: lock hips rotation so physics doesn’t stand it back up
-        if (lockHipsRotationAfterApply && ragdollHips != null)
+        if (lockHipsRotationXZ && ragdollHips != null)
         {
-            Rigidbody hipsRb = ragdollHips.GetComponent<Rigidbody>();
+            var hipsRb = ragdollHips.GetComponent<Rigidbody>();
             if (hipsRb != null)
             {
                 hipsRb.constraints |= RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
-                Log("Locked hips X/Z rotation (prevents standing back up).");
+            }
+        }
+    }
+
+    private void SnapCorpseToGround()
+    {
+        if (corpsePositionMode == CorpsePositionMode.None) return;
+
+        // We snap the entire modelRoot down based on a raycast from the hips (or model root)
+        if (modelRoot == null) return;
+
+        Transform probe = ragdollHips != null ? ragdollHips : modelRoot;
+
+        Vector3 origin = probe.position + Vector3.up * 0.5f;
+        if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, snapDownMaxDistance + 0.5f, corpseGroundMask, QueryTriggerInteraction.Ignore))
+        {
+            // Move modelRoot down so the probe sits on the hit point (plus small offset)
+            float deltaY = probe.position.y - hit.point.y;
+
+            // push model down
+            modelRoot.position -= new Vector3(0f, deltaY, 0f);
+
+            if (corpsePositionMode == CorpsePositionMode.SnapToGroundAndOffset)
+                modelRoot.position += corpseLocalOffset;
+
+            // also zero out velocities a bit so it settles
+            foreach (var rb in ragdollBodies)
+            {
+                if (rb == null) continue;
+                rb.velocity *= 0.1f;
+                rb.angularVelocity *= 0.1f;
             }
         }
     }
@@ -270,17 +302,17 @@ public class Death : MonoBehaviour
     {
         if (mainCamera == null) return;
 
-        // Make sure camera can see Spectator layer (so corpse stays visible)
+        // camera should SEE the corpse on Spectator layer
         int specLayer = LayerMask.NameToLayer(spectatorLayerName);
         if (specLayer >= 0)
             mainCamera.cullingMask |= (1 << specLayer);
 
-        // Tell PlayerView to enter spectator mode (stops rotating body + switches PP layer)
-        PlayerView pv = mainCamera.GetComponent<PlayerView>();
+        // tell PlayerView to switch PP + stop rotating body
+        var pv = mainCamera.GetComponent<PlayerView>();
         if (pv != null)
             pv.SetSpectatorMode(true);
 
-        // Disable all scripts on cylinder
+        // disable all scripts on cylinder (movement etc.)
         if (disableAllScriptsOnCylinder && playerCylinder != null)
         {
             var all = playerCylinder.GetComponents<MonoBehaviour>();
@@ -292,7 +324,7 @@ public class Death : MonoBehaviour
             }
         }
 
-        // DETACH camera from body completely by creating spectator rig
+        // detach camera to spectator controller
         Transform camT = mainCamera.transform;
         Vector3 camWorldPos = camT.position;
         Quaternion camWorldRot = camT.rotation;
@@ -313,7 +345,7 @@ public class Death : MonoBehaviour
         camT.position = camWorldPos;
         camT.rotation = camWorldRot;
 
-        SpectatorController controller = spec.AddComponent<SpectatorController>();
+        var controller = spec.AddComponent<SpectatorController>();
         controller.cc = cc;
         controller.cameraTransform = camT;
         controller.moveSpeed = spectatorMoveSpeed;
@@ -371,6 +403,7 @@ public class SpectatorController : MonoBehaviour
 
         float h = Input.GetAxisRaw("Horizontal");
         float v = Input.GetAxisRaw("Vertical");
+
         Vector3 input = new Vector3(h, 0f, v);
         input = Vector3.ClampMagnitude(input, 1f);
 
