@@ -307,6 +307,12 @@ public class GhostPursuit : MonoBehaviour
             return;
         }
 
+        if (!IsPlayerAlive(sanityRoot))
+        {
+            Log("TryStartHunt: target is dead -> skipping.");
+            return;
+        }
+
         float s = sanity.sanity;
         float chance = GetHuntChanceForSanity(s);
 
@@ -341,6 +347,29 @@ public class GhostPursuit : MonoBehaviour
         }
         return best;
     }
+
+    bool IsPlayerAlive(Transform playerRootOrChild)
+{
+    if (playerRootOrChild == null) return false;
+
+    Transform root = playerRootOrChild.root;
+
+    // 1) If Sanity exists and is dead / 0%, ignore
+    Sanity sanity = root.GetComponentInChildren<Sanity>(true);
+    if (sanity != null)
+    {
+        if (!sanity.enabled) return false;
+        if (sanity.sanity <= 0f) return false;
+        if (sanity.IsDead()) return false;
+    }
+
+    // 2) If Death.cs exists and says dead, ignore
+    Death death = root.GetComponentInChildren<Death>(true);
+    if (death != null && death.IsDead)
+        return false;
+
+    return true;
+} 
 
     void StartHunt()
     {
@@ -480,7 +509,12 @@ public class GhostPursuit : MonoBehaviour
         ResolvePlayerRootAndBodyTarget(force: false);
 
         Transform target = chasePlayerColliderChild && playerBodyTarget != null ? playerBodyTarget : playerRoot;
-
+        if (!IsPlayerAlive(target))
+        {
+            EndHunt("target died");
+            return;
+        }
+        
         if (target == null)
         {
             Log("ChasePlayer: no target.");
