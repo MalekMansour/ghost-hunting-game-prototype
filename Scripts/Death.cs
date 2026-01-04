@@ -54,7 +54,7 @@ public class Death : MonoBehaviour
     public bool deactivateModelRoot = true;
 
     [Header("Blood Splatter (NO particles)")]
-    [Tooltip("Prefab for a static blood splatter (recommended: a Quad with a transparent blood material, or URP Decal Projector prefab).")]
+    [Tooltip("Prefab for a static blood splatter (Quad/Plane with transparent URP material).")]
     public GameObject bloodSplatterPrefab;
 
     [Tooltip("Layers considered 'ground' for placing blood.")]
@@ -64,12 +64,12 @@ public class Death : MonoBehaviour
     public float groundRayDistance = 10f;
 
     [Tooltip("Small offset up to avoid z-fighting.")]
-    public float bloodUpOffset = 0.01f;
+    public float bloodUpOffset = 0.02f;
 
     [Tooltip("Randomize size of the blood splatter.")]
     public Vector2 bloodScaleRange = new Vector2(0.9f, 1.25f);
 
-    [Tooltip("Random rotation around up axis.")]
+    [Tooltip("Random rotation around the surface normal.")]
     public bool randomYaw = true;
 
     [Header("Spectator Mode")]
@@ -98,6 +98,7 @@ public class Death : MonoBehaviour
     public bool debugLogs = true;
 
     private bool deathStarted = false;
+    public bool IsDead => deathStarted;
     private bool soundPlayed = false;
 
     private void Awake()
@@ -119,7 +120,10 @@ public class Death : MonoBehaviour
     {
         EnsureRuntimeRefs();
 
-        // 1) Play animation immediately
+        // Drop inventory immediately when death starts (throw forward)
+        DropInventoryNow();
+
+        // Play animation immediately
         if (animator == null)
         {
             Log("[ERROR] Animator not found. Assign it or ensure it exists in children of the spawned model.");
@@ -139,26 +143,24 @@ public class Death : MonoBehaviour
             animator.SetBool(dieParamName, dieBoolValue);
         }
 
-        // 2) Play sound immediately (ONCE)
+        // Play sound immediately (ONCE)
         PlayDeathSoundOnce();
 
-        // 3) Wait until animation ends (real end)
+        // Wait until animation ends (real end)
         yield return WaitForDeathAnimationToFinish();
 
         if (afterAnimExtraDelay > 0f)
             yield return new WaitForSeconds(afterAnimExtraDelay);
 
-        // 4) Spawn blood splatter on the floor (static)
+        // Spawn blood splatter on the floor (static)
         SpawnBloodSplatter();
 
-        // 5) Remove body entirely
+        // Remove body entirely
         RemoveBody();
 
-        // 6) Optional delay before spectator starts
         if (spectatorDelay > 0f)
             yield return new WaitForSeconds(spectatorDelay);
 
-        // 7) Spectator
         ForceToSpectatorLayer();
         EnterSpectator();
     }
@@ -180,6 +182,17 @@ public class Death : MonoBehaviour
             bloodOrigin = (modelRoot != null) ? modelRoot : transform;
     }
 
+    private void DropInventoryNow()
+    {
+        if (playerCylinder == null) return;
+
+        PlayerInventory inv = playerCylinder.GetComponentInChildren<PlayerInventory>(true);
+        if (inv == null) return;
+
+        Transform throwFrom = (mainCamera != null) ? mainCamera.transform : transform;
+        inv.DropAllItemsOnDeath(throwFrom);
+    }
+
     private void PlayDeathSoundOnce()
     {
         if (soundPlayed) return;
@@ -194,15 +207,12 @@ public class Death : MonoBehaviour
 
     private IEnumerator WaitForDeathAnimationToFinish()
     {
-        // Wait at least one frame so Animator updates state after trigger/bool.
         yield return null;
 
         if (animator == null) yield break;
 
-        // If user provided a specific state name, wait for it to start then finish.
         if (!string.IsNullOrEmpty(deathStateName))
         {
-            // Wait until the death state is actually playing
             while (true)
             {
                 AnimatorStateInfo st = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
@@ -210,11 +220,10 @@ public class Death : MonoBehaviour
                 yield return null;
             }
 
-            // Now wait until it finishes (normalizedTime >= 1)
             while (true)
             {
                 AnimatorStateInfo st = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
-                if (!st.IsName(deathStateName)) break; // state changed -> consider done
+                if (!st.IsName(deathStateName)) break;
                 if (st.normalizedTime >= 1f) break;
                 yield return null;
             }
@@ -222,14 +231,9 @@ public class Death : MonoBehaviour
             yield break;
         }
 
-        // Otherwise: wait for the “current state after Die” to finish.
-        // We capture the current state's fullPathHash and wait until either:
-        // - it reaches normalizedTime >= 1, OR
-        // - animator changes to another state.
         AnimatorStateInfo startState = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
         int startHash = startState.fullPathHash;
 
-        // If the state has no length (rare), just wait a short moment
         if (startState.length <= 0.0001f)
         {
             yield return new WaitForSeconds(0.3f);
@@ -239,71 +243,38 @@ public class Death : MonoBehaviour
         while (true)
         {
             AnimatorStateInfo st = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
-
-            // State changed -> the death state likely completed and transitioned out
-            if (st.fullPathHash != startHash)
-                break;
-
-            if (st.normalizedTime >= 1f)
-                break;
-
+            if (st.fullPathHash != startHash) break;
+            if (st.normalizedTime >= 1f) break;
             yield return null;
         }
     }
 
     private void SpawnBloodSplatter()
-{
-    if (bloodSplatterPrefab == null || bloodOrigin == null) return;
-
-    Vector3 origin = bloodOrigin.position + Vector3.up * 0.75f;
-
-    if (!Physics.Raycast(origin, Vector3.down, out RaycastHit hit, groundRayDistance, groundMask, QueryTriggerInteraction.Ignore))
-        return;
-
-    Vector3 pos = hit.point + hit.normal * bloodUpOffset;
-
-    // --- IMPORTANT ---
-    // Many blood prefabs are built "standing" (quad faces forward).
-    // We force a guaranteed "flat-on-floor" base rotation first.
-    // This assumes your blood quad's normal points FORWARD (Z+) by default.
-    // Flat on ground means its normal should match hit.normal.
-    Quaternion flat = Quaternion.FromToRotation(Vector3.forward, hit.normal);
-
-    // Optional random spin around the normal
-    if (randomYaw)
     {
-        float yaw = Random.Range(0f, 360f);
-        flat = Quaternion.AngleAxis(yaw, hit.normal) * flat;
+        if (bloodSplatterPrefab == null || bloodOrigin == null) return;
+
+        Vector3 origin = bloodOrigin.position + Vector3.up * 0.75f;
+
+        if (!Physics.Raycast(origin, Vector3.down, out RaycastHit hit, groundRayDistance, groundMask, QueryTriggerInteraction.Ignore))
+            return;
+
+        Vector3 pos = hit.point + hit.normal * Mathf.Max(0.02f, bloodUpOffset);
+
+        // Quad faces forward (Z+). If using Plane, change Vector3.forward to Vector3.up.
+        Quaternion rot = Quaternion.FromToRotation(Vector3.forward, hit.normal);
+
+        if (randomYaw)
+        {
+            float yaw = Random.Range(0f, 360f);
+            rot = Quaternion.AngleAxis(yaw, hit.normal) * rot;
+        }
+
+        GameObject blood = Instantiate(bloodSplatterPrefab, pos, rot);
+        blood.transform.SetParent(null, true);
+
+        float s = Random.Range(bloodScaleRange.x, bloodScaleRange.y);
+        blood.transform.localScale = blood.transform.localScale * s;
     }
-
-    GameObject blood = Instantiate(bloodSplatterPrefab, pos, flat);
-    blood.transform.SetParent(null, true); // never parent it
-
-    // Random scale (uniform)
-    float s = Random.Range(bloodScaleRange.x, bloodScaleRange.y);
-    blood.transform.localScale = blood.transform.localScale * s;
-
-    // Freeze rotation AFTER one frame in case something on Awake/Start overwrites it
-    StartCoroutine(FreezeBloodRotationNextFrame(blood.transform, flat));
-}
-
-private IEnumerator FreezeBloodRotationNextFrame(Transform t, Quaternion desiredRotation)
-{
-    if (t == null) yield break;
-
-    yield return null; // let prefab Awake/Start run
-
-    if (t == null) yield break;
-    t.rotation = desiredRotation;
-
-    // If there's a Rigidbody on it, freeze it so physics never tips it
-    Rigidbody rb = t.GetComponent<Rigidbody>();
-    if (rb != null)
-    {
-        rb.isKinematic = true;
-        rb.constraints = RigidbodyConstraints.FreezeAll;
-    }
-}
 
     private void RemoveBody()
     {
@@ -321,7 +292,6 @@ private IEnumerator FreezeBloodRotationNextFrame(Transform t, Quaternion desired
             foreach (var c in cols) c.enabled = false;
         }
 
-        // Stop animator so it doesn't keep running
         if (animator != null)
             animator.enabled = false;
 
@@ -361,12 +331,10 @@ private IEnumerator FreezeBloodRotationNextFrame(Transform t, Quaternion desired
         if (disableFlashlightForever)
             DisableFlashlight(mainCamera);
 
-        // Tell PlayerView to stop rotating the body + switch PP mask (your PlayerView already handles this)
         var pv = mainCamera.GetComponent<PlayerView>();
         if (pv != null)
             pv.SetSpectatorMode(true);
 
-        // Disable every script on the cylinder (optional)
         if (disableAllScriptsOnCylinder && playerCylinder != null)
         {
             var scripts = playerCylinder.GetComponentsInChildren<MonoBehaviour>(true);
@@ -378,7 +346,6 @@ private IEnumerator FreezeBloodRotationNextFrame(Transform t, Quaternion desired
             }
         }
 
-        // Detach camera into a new controller object
         Transform camT = mainCamera.transform;
         Vector3 camPos = camT.position;
         Quaternion camRot = camT.rotation;
@@ -416,11 +383,9 @@ private IEnumerator FreezeBloodRotationNextFrame(Transform t, Quaternion desired
     {
         if (cam == null) return;
 
-        // Disable any lights under camera
         var lights = cam.GetComponentsInChildren<Light>(true);
         foreach (var l in lights) l.enabled = false;
 
-        // Disable flashlight scripts by name (optional)
         var behaviours = cam.GetComponentsInChildren<MonoBehaviour>(true);
         foreach (var b in behaviours)
         {
