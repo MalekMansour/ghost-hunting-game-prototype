@@ -4,63 +4,88 @@ using System.Collections;
 public class Death : MonoBehaviour
 {
     [Header("References")]
+    [Tooltip("Your player cylinder root (the object that has all the scripts). If empty, auto uses transform.root.")]
     public GameObject playerCylinder;
-    public Animator animator;
-    public Transform modelRoot;
-    public Transform ragdollHips;
-    public Camera mainCamera;
-    public AudioSource audioSource;
 
-    [Header("Animator")]
+    [Tooltip("Main camera (usually Camera.main). If empty, auto found.")]
+    public Camera mainCamera;
+
+    [Tooltip("AudioSource to play the death sound. If empty, tries to find one on the cylinder.")]
+    public AudioSource deathAudioSource;
+
+    [Header("Animator / Model")]
+    [Tooltip("Animator on the spawned character model. If empty, auto-found in children at runtime.")]
+    public Animator animator;
+
+    [Tooltip("Root of the visual model (mesh/armature root). If empty, uses animator.transform.")]
+    public Transform modelRoot;
+
+    [Tooltip("Optional: a bone/transform near the torso/hips (used for blood raycast origin). If empty, uses modelRoot.")]
+    public Transform bloodOrigin;
+
+    [Header("Death Animation Params")]
     public string dieParamName = "Die";
     public enum DieParamMode { Trigger, Bool }
     public DieParamMode dieParamMode = DieParamMode.Trigger;
     public bool dieBoolValue = true;
 
-    [Header("Timing")]
-    [Tooltip("Spectator starts after this many seconds (animation/sound still start instantly).")]
-    public float spectatorDelay = 3f;
-
-    [Tooltip("0 = ragdoll instantly. Increase if you want the animation to play first.")]
-    public float ragdollDelay = 0f;
-
     [Header("Death Sound")]
     public AudioClip deathClip;
-    [Range(0f, 1f)]
-    public float deathSoundVolume = 0.7f;
+    [Range(0f, 1f)] public float deathVolume = 0.8f;
 
-    [Header("Layers")]
+    [Header("Wait For Animation End")]
+    [Tooltip("Animator layer index to read the death state from (usually 0).")]
+    public int animatorLayerIndex = 0;
+
+    [Tooltip("If set, we will wait until THIS state is playing and finished. Leave empty to wait for whichever state is active after Die.")]
+    public string deathStateName = "";
+
+    [Tooltip("Extra time after animation finishes before we remove the body (seconds).")]
+    public float afterAnimExtraDelay = 0.0f;
+
+    [Header("Body Removal")]
+    [Tooltip("If true, disable all renderers under modelRoot when the animation ends.")]
+    public bool disableRenderersOnDeathEnd = true;
+
+    [Tooltip("If true, also disable all Colliders under modelRoot (so you can't bump the invisible body).")]
+    public bool disableCollidersOnDeathEnd = true;
+
+    [Tooltip("If true, set modelRoot gameObject inactive after disabling things (strongest 'remove body').")]
+    public bool deactivateModelRoot = true;
+
+    [Header("Blood Splatter (NO particles)")]
+    [Tooltip("Prefab for a static blood splatter (recommended: a Quad with a transparent blood material, or URP Decal Projector prefab).")]
+    public GameObject bloodSplatterPrefab;
+
+    [Tooltip("Layers considered 'ground' for placing blood.")]
+    public LayerMask groundMask = ~0;
+
+    [Tooltip("How far down we raycast to find the floor.")]
+    public float groundRayDistance = 10f;
+
+    [Tooltip("Small offset up to avoid z-fighting.")]
+    public float bloodUpOffset = 0.01f;
+
+    [Tooltip("Randomize size of the blood splatter.")]
+    public Vector2 bloodScaleRange = new Vector2(0.9f, 1.25f);
+
+    [Tooltip("Random rotation around up axis.")]
+    public bool randomYaw = true;
+
+    [Header("Spectator Mode")]
+    [Tooltip("Delay AFTER body removal before spectator starts (0 = instant).")]
+    public float spectatorDelay = 0.0f;
+
     public string spectatorLayerName = "Spectator";
 
-    [Header("Ragdoll")]
-    public bool detachModelOnRagdoll = true;
-    public bool disableCylinderCharacterControllerOnRagdoll = true;
-
-    [Tooltip("Fixes the 'corpse becomes tiny' issue by preserving world scale when detaching.")]
-    public bool preserveWorldScaleOnDetach = true;
-
-    public enum CorpseRotationMode { None, UseEuler }
-    [Header("Corpse Base Rotation (Inspector)")]
-    public CorpseRotationMode corpseRotationMode = CorpseRotationMode.None;
-    public Vector3 corpseEulerRotation = new Vector3(90f, 0f, 0f);
-
-    public enum CorpsePositionMode { None, GroundUsingLowestColliderAndOffset }
-    [Header("Corpse Grounding (FIX floating)")]
-    public CorpsePositionMode corpsePositionMode = CorpsePositionMode.GroundUsingLowestColliderAndOffset;
-
-    [Tooltip("What counts as ground.")]
-    public LayerMask corpseGroundMask = ~0;
-
-    [Tooltip("How far down we try to find ground.")]
-    public float snapDownMaxDistance = 10f;
-
-    [Tooltip("Offset applied AFTER grounding. (IMPORTANT: Applies even if grounding raycast fails.)")]
-    public Vector3 corpseOffsetAfterSnap = new Vector3(0f, 0.02f, 0f);
-
-    [Header("Disable scripts")]
+    [Header("Disable Scripts on Cylinder")]
+    [Tooltip("If true, disables every MonoBehaviour on the player cylinder once spectator begins (except this script).")]
     public bool disableAllScriptsOnCylinder = true;
 
-    [Header("Spectator")]
+    [Tooltip("Also disable Light components on the camera (flashlight).")]
+    public bool disableFlashlightForever = true;
+
+    [Header("Spectator Movement")]
     public float spectatorControllerHeight = 1.8f;
     public float spectatorControllerRadius = 0.35f;
     public float spectatorMoveSpeed = 5f;
@@ -72,39 +97,35 @@ public class Death : MonoBehaviour
     [Header("Debug")]
     public bool debugLogs = true;
 
-    private bool deadStarted = false;
+    private bool deathStarted = false;
     private bool soundPlayed = false;
-
-    private Rigidbody[] ragdollBodies;
-    private Collider[] ragdollColliders;
-    private Collider[] cylinderColliders;
-    private CharacterController cylinderCC;
 
     private void Awake()
     {
         if (playerCylinder == null) playerCylinder = transform.root.gameObject;
         if (mainCamera == null) mainCamera = Camera.main;
-        if (audioSource == null) audioSource = GetComponent<AudioSource>();
+        if (deathAudioSource == null && playerCylinder != null)
+            deathAudioSource = playerCylinder.GetComponentInChildren<AudioSource>(true);
     }
 
     public void BeginDeath()
     {
-        if (deadStarted) return;
-        deadStarted = true;
+        if (deathStarted) return;
+        deathStarted = true;
         StartCoroutine(DeathRoutine());
     }
 
     private IEnumerator DeathRoutine()
     {
-        EnsureRuntimeReferences();
+        EnsureRuntimeRefs();
 
+        // 1) Play animation immediately
         if (animator == null)
         {
-            Log("ERROR: Animator not found at death time.");
+            Log("[ERROR] Animator not found. Assign it or ensure it exists in children of the spawned model.");
             yield break;
         }
 
-        // Animation starts immediately (no delay)
         animator.enabled = true;
         animator.speed = 1f;
 
@@ -118,53 +139,45 @@ public class Death : MonoBehaviour
             animator.SetBool(dieParamName, dieBoolValue);
         }
 
-        // Sound starts immediately — and ONLY ONCE
+        // 2) Play sound immediately (ONCE)
         PlayDeathSoundOnce();
 
-        // Optional ragdoll delay (default 0)
-        if (ragdollDelay > 0f)
-            yield return new WaitForSeconds(ragdollDelay);
+        // 3) Wait until animation ends (real end)
+        yield return WaitForDeathAnimationToFinish();
 
-        EnableRagdoll();
+        if (afterAnimExtraDelay > 0f)
+            yield return new WaitForSeconds(afterAnimExtraDelay);
 
-        // Base rotation first (optional)
-        ApplyBaseCorpseRotation();
+        // 4) Spawn blood splatter on the floor (static)
+        SpawnBloodSplatter();
 
-        yield return null; // one frame so ragdoll colliders/bounds update
+        // 5) Remove body entirely
+        RemoveBody();
 
-        // Proper grounding + ALWAYS apply offset
-        GroundCorpseNow();
-
-        // spectator after spectatorDelay
+        // 6) Optional delay before spectator starts
         if (spectatorDelay > 0f)
             yield return new WaitForSeconds(spectatorDelay);
 
-        ForceAllToSpectatorLayer();
+        // 7) Spectator
+        ForceToSpectatorLayer();
         EnterSpectator();
     }
 
-    private void EnsureRuntimeReferences()
+    private void EnsureRuntimeRefs()
     {
         if (playerCylinder == null) playerCylinder = transform.root.gameObject;
         if (mainCamera == null) mainCamera = Camera.main;
-        if (audioSource == null) audioSource = GetComponent<AudioSource>();
 
         if (animator == null)
-            animator = transform.root.GetComponentInChildren<Animator>(true);
+            animator = playerCylinder != null
+                ? playerCylinder.GetComponentInChildren<Animator>(true)
+                : GetComponentInChildren<Animator>(true);
 
         if (modelRoot == null && animator != null)
             modelRoot = animator.transform;
 
-        if (modelRoot != null && ragdollBodies == null)
-        {
-            ragdollBodies = modelRoot.GetComponentsInChildren<Rigidbody>(true);
-            ragdollColliders = modelRoot.GetComponentsInChildren<Collider>(true);
-
-            cylinderColliders = playerCylinder.GetComponentsInChildren<Collider>(true);
-            cylinderCC = playerCylinder.GetComponent<CharacterController>();
-
-            SetRagdollState(false);
-        }
+        if (bloodOrigin == null)
+            bloodOrigin = (modelRoot != null) ? modelRoot : transform;
     }
 
     private void PlayDeathSoundOnce()
@@ -172,180 +185,168 @@ public class Death : MonoBehaviour
         if (soundPlayed) return;
         soundPlayed = true;
 
-        if (audioSource != null && deathClip != null)
+        if (deathAudioSource != null && deathClip != null)
         {
-            audioSource.PlayOneShot(deathClip, deathSoundVolume);
+            deathAudioSource.spatialBlend = 0f;
+            deathAudioSource.PlayOneShot(deathClip, Mathf.Clamp01(deathVolume));
         }
     }
 
-    private void EnableRagdoll()
+    private IEnumerator WaitForDeathAnimationToFinish()
     {
-        if (modelRoot == null || ragdollBodies == null || ragdollBodies.Length == 0)
+        // Wait at least one frame so Animator updates state after trigger/bool.
+        yield return null;
+
+        if (animator == null) yield break;
+
+        // If user provided a specific state name, wait for it to start then finish.
+        if (!string.IsNullOrEmpty(deathStateName))
         {
-            Log("Ragdoll FAILED: no rigidbodies under modelRoot (need ragdoll rig).");
-            return;
+            // Wait until the death state is actually playing
+            while (true)
+            {
+                AnimatorStateInfo st = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
+                if (st.IsName(deathStateName)) break;
+                yield return null;
+            }
+
+            // Now wait until it finishes (normalizedTime >= 1)
+            while (true)
+            {
+                AnimatorStateInfo st = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
+                if (!st.IsName(deathStateName)) break; // state changed -> consider done
+                if (st.normalizedTime >= 1f) break;
+                yield return null;
+            }
+
+            yield break;
         }
 
-        // --- KEY FIX: preserve world scale when detaching ---
-        if (detachModelOnRagdoll && modelRoot.parent != null)
+        // Otherwise: wait for the “current state after Die” to finish.
+        // We capture the current state's fullPathHash and wait until either:
+        // - it reaches normalizedTime >= 1, OR
+        // - animator changes to another state.
+        AnimatorStateInfo startState = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
+        int startHash = startState.fullPathHash;
+
+        // If the state has no length (rare), just wait a short moment
+        if (startState.length <= 0.0001f)
         {
-            if (preserveWorldScaleOnDetach)
-            {
-                // Store the visible (world) scale before detaching
-                Vector3 worldScale = modelRoot.lossyScale;
-
-                modelRoot.SetParent(null, true);
-
-                // After detaching, localScale should match the old world scale (fixes tiny corpse)
-                modelRoot.localScale = worldScale;
-            }
-            else
-            {
-                modelRoot.SetParent(null, true);
-            }
+            yield return new WaitForSeconds(0.3f);
+            yield break;
         }
 
-        // Stop animator so it doesn't fight ragdoll
-        if (animator != null) animator.enabled = false;
-
-        if (disableCylinderCharacterControllerOnRagdoll && cylinderCC != null)
-            cylinderCC.enabled = false;
-
-        SetRagdollState(true);
-
-        // Disable cylinder colliders that aren't part of the model
-        if (cylinderColliders != null && modelRoot != null)
+        while (true)
         {
-            foreach (var c in cylinderColliders)
-            {
-                if (c == null) continue;
-                if (c.transform.IsChildOf(modelRoot)) continue;
-                c.enabled = false;
-            }
+            AnimatorStateInfo st = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
+
+            // State changed -> the death state likely completed and transitioned out
+            if (st.fullPathHash != startHash)
+                break;
+
+            if (st.normalizedTime >= 1f)
+                break;
+
+            yield return null;
         }
     }
 
-    private void SetRagdollState(bool enabled)
+    private void SpawnBloodSplatter()
+{
+    if (bloodSplatterPrefab == null || bloodOrigin == null) return;
+
+    Vector3 origin = bloodOrigin.position + Vector3.up * 0.75f;
+
+    if (!Physics.Raycast(origin, Vector3.down, out RaycastHit hit, groundRayDistance, groundMask, QueryTriggerInteraction.Ignore))
+        return;
+
+    Vector3 pos = hit.point + hit.normal * bloodUpOffset;
+
+    // --- IMPORTANT ---
+    // Many blood prefabs are built "standing" (quad faces forward).
+    // We force a guaranteed "flat-on-floor" base rotation first.
+    // This assumes your blood quad's normal points FORWARD (Z+) by default.
+    // Flat on ground means its normal should match hit.normal.
+    Quaternion flat = Quaternion.FromToRotation(Vector3.forward, hit.normal);
+
+    // Optional random spin around the normal
+    if (randomYaw)
     {
-        foreach (var rb in ragdollBodies)
-        {
-            if (rb == null) continue;
-            rb.isKinematic = !enabled;
-            rb.detectCollisions = enabled;
-        }
-
-        foreach (var col in ragdollColliders)
-        {
-            if (col == null) continue;
-            col.enabled = enabled;
-        }
+        float yaw = Random.Range(0f, 360f);
+        flat = Quaternion.AngleAxis(yaw, hit.normal) * flat;
     }
 
-    private void ApplyBaseCorpseRotation()
+    GameObject blood = Instantiate(bloodSplatterPrefab, pos, flat);
+    blood.transform.SetParent(null, true); // never parent it
+
+    // Random scale (uniform)
+    float s = Random.Range(bloodScaleRange.x, bloodScaleRange.y);
+    blood.transform.localScale = blood.transform.localScale * s;
+
+    // Freeze rotation AFTER one frame in case something on Awake/Start overwrites it
+    StartCoroutine(FreezeBloodRotationNextFrame(blood.transform, flat));
+}
+
+private IEnumerator FreezeBloodRotationNextFrame(Transform t, Quaternion desiredRotation)
+{
+    if (t == null) yield break;
+
+    yield return null; // let prefab Awake/Start run
+
+    if (t == null) yield break;
+    t.rotation = desiredRotation;
+
+    // If there's a Rigidbody on it, freeze it so physics never tips it
+    Rigidbody rb = t.GetComponent<Rigidbody>();
+    if (rb != null)
     {
-        if (corpseRotationMode == CorpseRotationMode.None) return;
-
-        Transform target = ragdollHips != null ? ragdollHips : modelRoot;
-        if (target == null) return;
-
-        target.rotation = Quaternion.Euler(corpseEulerRotation);
+        rb.isKinematic = true;
+        rb.constraints = RigidbodyConstraints.FreezeAll;
     }
+}
 
-    /// <summary>
-    /// Grounds the corpse by finding the LOWEST ragdoll collider (bounds.min.y),
-    /// attempts multiple raycast origins, and ALWAYS applies corpseOffsetAfterSnap
-    /// even if raycasts miss (so your offset always does something).
-    /// </summary>
-    private void GroundCorpseNow()
+    private void RemoveBody()
     {
-        if (corpsePositionMode == CorpsePositionMode.None) return;
-        if (modelRoot == null || ragdollColliders == null || ragdollColliders.Length == 0)
+        if (modelRoot == null) return;
+
+        if (disableRenderersOnDeathEnd)
         {
-            Log("GroundCorpseNow: missing modelRoot or ragdollColliders.");
-            return;
+            var renderers = modelRoot.GetComponentsInChildren<Renderer>(true);
+            foreach (var r in renderers) r.enabled = false;
         }
 
-        // Find lowest Y among ragdoll collider bounds + build combined bounds
-        float lowestY = float.PositiveInfinity;
-        Bounds combined = new Bounds(modelRoot.position, Vector3.zero);
-        bool haveBounds = false;
-
-        foreach (var col in ragdollColliders)
+        if (disableCollidersOnDeathEnd)
         {
-            if (col == null || !col.enabled) continue;
-
-            float y = col.bounds.min.y;
-            if (y < lowestY) lowestY = y;
-
-            if (!haveBounds)
-            {
-                combined = col.bounds;
-                haveBounds = true;
-            }
-            else
-            {
-                combined.Encapsulate(col.bounds);
-            }
+            var cols = modelRoot.GetComponentsInChildren<Collider>(true);
+            foreach (var c in cols) c.enabled = false;
         }
 
-        bool grounded = false;
+        // Stop animator so it doesn't keep running
+        if (animator != null)
+            animator.enabled = false;
 
-        if (!float.IsInfinity(lowestY) && haveBounds)
-        {
-            Vector3[] origins = new Vector3[]
-            {
-                new Vector3(combined.center.x, combined.max.y + 0.75f, combined.center.z),
-                new Vector3(combined.min.x,    combined.max.y + 0.75f, combined.min.z),
-                new Vector3(combined.max.x,    combined.max.y + 0.75f, combined.max.z),
-                new Vector3(combined.min.x,    combined.max.y + 0.75f, combined.max.z),
-                new Vector3(combined.max.x,    combined.max.y + 0.75f, combined.min.z),
-                (ragdollHips != null ? ragdollHips.position + Vector3.up * 1.0f : modelRoot.position + Vector3.up * 1.0f),
-            };
-
-            RaycastHit hit;
-            for (int i = 0; i < origins.Length; i++)
-            {
-                if (Physics.Raycast(origins[i], Vector3.down, out hit, snapDownMaxDistance + 5f, corpseGroundMask, QueryTriggerInteraction.Ignore))
-                {
-                    // Move modelRoot so lowest collider touches ground
-                    float delta = lowestY - hit.point.y;
-                    modelRoot.position -= new Vector3(0f, delta, 0f);
-
-                    grounded = true;
-                    break;
-                }
-            }
-        }
-
-        // ALWAYS apply offset (this is what makes -50 actually move)
-        modelRoot.position += corpseOffsetAfterSnap;
-
-        if (debugLogs)
-        {
-            Log($"GroundCorpseNow: grounded={grounded}, applied corpseOffsetAfterSnap={corpseOffsetAfterSnap}");
-            if (!grounded)
-                Log("TIP: grounded=false means corpseGroundMask likely doesn't include your floor layer OR your floor has no collider.");
-        }
+        if (deactivateModelRoot)
+            modelRoot.gameObject.SetActive(false);
     }
 
-    private void ForceAllToSpectatorLayer()
+    private void ForceToSpectatorLayer()
     {
         int specLayer = LayerMask.NameToLayer(spectatorLayerName);
         if (specLayer < 0)
         {
-            Log($"ERROR: Layer '{spectatorLayerName}' not found.");
+            Log($"[ERROR] Layer '{spectatorLayerName}' not found.");
             return;
         }
 
-        SetLayerRecursively(transform.root.gameObject, specLayer);
-        if (playerCylinder != null) SetLayerRecursively(playerCylinder, specLayer);
-        if (modelRoot != null) SetLayerRecursively(modelRoot.gameObject, specLayer);
+        if (playerCylinder != null)
+            SetLayerRecursively(playerCylinder, specLayer);
     }
 
     private void SetLayerRecursively(GameObject obj, int layer)
     {
         if (obj == null) return;
         obj.layer = layer;
+
         foreach (Transform child in obj.transform)
         {
             if (child == null) continue;
@@ -357,24 +358,19 @@ public class Death : MonoBehaviour
     {
         if (mainCamera == null) return;
 
-        // Make sure camera can see spectator layer (corpse)
-        int specLayer = LayerMask.NameToLayer(spectatorLayerName);
-        if (specLayer >= 0)
-            mainCamera.cullingMask |= (1 << specLayer);
+        if (disableFlashlightForever)
+            DisableFlashlight(mainCamera);
 
-        // Disable flashlight FOREVER once dead (on camera or children)
-        DisableFlashlightForever(mainCamera);
-
-        // Switch PP + stop body rotation (PlayerView handles URP Volume fade)
+        // Tell PlayerView to stop rotating the body + switch PP mask (your PlayerView already handles this)
         var pv = mainCamera.GetComponent<PlayerView>();
         if (pv != null)
             pv.SetSpectatorMode(true);
 
-        // Disable all scripts on cylinder (movement, interaction, etc.)
+        // Disable every script on the cylinder (optional)
         if (disableAllScriptsOnCylinder && playerCylinder != null)
         {
-            var all = playerCylinder.GetComponents<MonoBehaviour>();
-            foreach (var mb in all)
+            var scripts = playerCylinder.GetComponentsInChildren<MonoBehaviour>(true);
+            foreach (var mb in scripts)
             {
                 if (mb == null) continue;
                 if (mb == this) continue;
@@ -382,16 +378,18 @@ public class Death : MonoBehaviour
             }
         }
 
-        // Detach camera and create spectator controller
+        // Detach camera into a new controller object
         Transform camT = mainCamera.transform;
-        Vector3 camWorldPos = camT.position;
-        Quaternion camWorldRot = camT.rotation;
+        Vector3 camPos = camT.position;
+        Quaternion camRot = camT.rotation;
 
         GameObject spec = new GameObject("SpectatorController");
-        spec.transform.position = camWorldPos;
-        spec.transform.rotation = Quaternion.Euler(0f, camWorldRot.eulerAngles.y, 0f);
+        spec.transform.position = camPos;
+        spec.transform.rotation = Quaternion.Euler(0f, camRot.eulerAngles.y, 0f);
 
-        if (specLayer >= 0) SetLayerRecursively(spec, specLayer);
+        int specLayer = LayerMask.NameToLayer(spectatorLayerName);
+        if (specLayer >= 0)
+            SetLayerRecursively(spec, specLayer);
 
         CharacterController cc = spec.AddComponent<CharacterController>();
         cc.height = spectatorControllerHeight;
@@ -400,8 +398,8 @@ public class Death : MonoBehaviour
         cc.stepOffset = 0.25f;
 
         camT.SetParent(spec.transform, true);
-        camT.position = camWorldPos;
-        camT.rotation = camWorldRot;
+        camT.position = camPos;
+        camT.rotation = camRot;
 
         var controller = spec.AddComponent<SpectatorController>();
         controller.cc = cc;
@@ -411,19 +409,18 @@ public class Death : MonoBehaviour
         controller.lookSensitivity = spectatorLookSensitivity;
         controller.lockCursor = lockCursor;
         controller.keepWorldY = keepCameraWorldY;
-        controller.fixedWorldY = camWorldPos.y;
+        controller.fixedWorldY = camPos.y;
     }
 
-    private void DisableFlashlightForever(Camera cam)
+    private void DisableFlashlight(Camera cam)
     {
         if (cam == null) return;
 
-        // If your flashlight is a Light component on the camera or children:
+        // Disable any lights under camera
         var lights = cam.GetComponentsInChildren<Light>(true);
-        foreach (var l in lights)
-            l.enabled = false;
+        foreach (var l in lights) l.enabled = false;
 
-        // If you have a script named "Flashlight"
+        // Disable flashlight scripts by name (optional)
         var behaviours = cam.GetComponentsInChildren<MonoBehaviour>(true);
         foreach (var b in behaviours)
         {
@@ -496,4 +493,3 @@ public class SpectatorController : MonoBehaviour
         }
     }
 }
-
