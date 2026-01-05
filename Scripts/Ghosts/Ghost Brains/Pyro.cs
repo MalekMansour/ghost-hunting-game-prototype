@@ -21,7 +21,7 @@ public class Pyro : MonoBehaviour
     public float campRadius = 25f;
 
     [Tooltip("How often we re-push Investigate while locked on (smaller = more priority).")]
-    public float forceInvestigateInterval = 0.05f; // 20x per second
+    public float forceInvestigateInterval = 0.05f; 
 
     [Header("Target Switching")]
     public float switchMargin = 0.5f;
