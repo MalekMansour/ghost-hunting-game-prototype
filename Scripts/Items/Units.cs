@@ -2,7 +2,7 @@ using UnityEngine;
 
 public class Units : MonoBehaviour
 {
-    [Header("Environmental Units (0 → Infinity)")]
+    [Header("Environmental Units")]
     public float light = 0f;
     public float noise = 0f;
     public float heat = 0f;
@@ -13,7 +13,6 @@ public class Units : MonoBehaviour
 
     void OnDisable()
     {
-        // Critical: no lingering signal when this component is OFF
         ZeroAll();
     }
 
@@ -33,10 +32,9 @@ public class Units : MonoBehaviour
         water = 0f;
     }
 
-    // Helpers (optional)
     public void SetNoise(float value)
     {
-        noise = Mathf.Max(0f, value); // allow 0..infinity, block negatives
+        noise = Mathf.Max(0f, value); 
     }
 
     public void AddNoise(float value)
