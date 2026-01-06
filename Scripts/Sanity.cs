@@ -47,7 +47,6 @@ public class Sanity : MonoBehaviour
     private bool isDead = false;
 
     private const string DifficultyPrefKey = "SelectedDifficulty";
-    // 0 Casual, 1 Standard, 2 Professional, 3 Lethal
 
     void Start()
     {
@@ -127,7 +126,6 @@ public class Sanity : MonoBehaviour
         // Death sound
         if (deathAudioSource != null && deathClip != null)
         {
-            // local feedback; multiplayer-safe later (don’t broadcast globally)
             deathAudioSource.spatialBlend = 0f;
             deathAudioSource.PlayOneShot(deathClip, Mathf.Clamp(deathClipVolume, 0f, 3f));
         }
