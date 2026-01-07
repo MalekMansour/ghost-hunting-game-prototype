@@ -68,7 +68,6 @@ public class GhostAnimatorDriver : MonoBehaviour
 
         if (debugSpeed && !warnedOnce)
         {
-            // If actual velocity is 0 but desired velocity isn't, use desired velocity (some agents report 0)
             if (agent.velocity.magnitude < 0.05f && agent.desiredVelocity.magnitude > 0.2f)
             {
                 warnedOnce = true;
