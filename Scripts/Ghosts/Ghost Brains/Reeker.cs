@@ -22,7 +22,7 @@ public class Reeker : MonoBehaviour
     public float campRadius = 25f;
 
     [Tooltip("How often we re-push InvestigateNoise while locked on (smaller = more priority).")]
-    public float forceInvestigateInterval = 0.05f; // same as Echoe
+    public float forceInvestigateInterval = 0.05f; 
 
     [Header("Target Switching")]
     public float switchMargin = 0.5f;
@@ -34,7 +34,6 @@ public class Reeker : MonoBehaviour
     private Units currentTarget;
     private float currentSmellValue;
 
-    // cluster investigation point (snapped to navmesh)
     private Vector3 currentSmellPoint;
 
     private Coroutine scanRoutine;
@@ -80,7 +79,6 @@ public class Reeker : MonoBehaviour
         Vector3 sumPos = Vector3.zero;
         int count = 0;
 
-        // include center
         if (center.smell > 0f)
         {
             sumSmell += center.smell;
@@ -88,7 +86,6 @@ public class Reeker : MonoBehaviour
             count++;
         }
 
-        // include neighbors
         for (int i = 0; i < all.Length; i++)
         {
             Units u = all[i];
