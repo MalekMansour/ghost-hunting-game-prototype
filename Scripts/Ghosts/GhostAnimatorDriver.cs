@@ -18,14 +18,13 @@ public class GhostAnimatorDriver : MonoBehaviour
     [Header("Safety")]
     public bool forceAlwaysAnimate = true;
     public bool disableRootMotion = true;
-    public bool useDesiredVelocity = true; // ✅ important for some agent setups
+    public bool useDesiredVelocity = true; 
     public bool debugSpeed = false;
 
     private bool warnedOnce;
 
     void Awake()
     {
-        // Fallback auto-find if spawner didn't inject
         if (!agent) agent = GetComponentInParent<NavMeshAgent>();
         if (!animator) animator = GetComponentInChildren<Animator>(true);
 
