@@ -31,7 +31,6 @@ public class GhostAnimatorDriver : MonoBehaviour
         ApplyAnimatorSafety();
     }
 
-    // ✅ Spawner can call this to bind exact refs
     public void Bind(Animator a, NavMeshAgent nav)
     {
         animator = a;
