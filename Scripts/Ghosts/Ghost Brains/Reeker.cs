@@ -65,7 +65,6 @@ public class Reeker : MonoBehaviour
         }
     }
 
-    // Sum smell of nearby sources + compute cluster center (average position)
     void ComputeCluster(Units center, Units[] all, out float clusterSmell, out Vector3 clusterCenter)
     {
         clusterSmell = 0f;
@@ -107,7 +106,6 @@ public class Reeker : MonoBehaviour
         if (count > 0) clusterCenter = sumPos / count;
     }
 
-    // Snap any point to nearest NavMesh point (robust for objects off the navmesh)
     Vector3 SnapToNavMesh(Vector3 p)
     {
         if (NavMesh.SamplePosition(p, out NavMeshHit hit, navMeshSnapRadius, NavMesh.AllAreas))
