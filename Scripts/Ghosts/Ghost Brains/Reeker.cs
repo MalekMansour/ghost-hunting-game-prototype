@@ -172,7 +172,6 @@ public class Reeker : MonoBehaviour
             return;
         }
 
-        // Snap the investigation point to NavMesh
         Vector3 snappedPoint = SnapToNavMesh(bestPoint);
 
         if (currentTarget == null)
