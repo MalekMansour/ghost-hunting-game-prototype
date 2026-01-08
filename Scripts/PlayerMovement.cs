@@ -20,18 +20,27 @@ public class PlayerMovement : MonoBehaviour
     public float crouchCamHeight = 0.6f;
     public float camSmoothSpeed = 8f;
 
+    [Header("Audio")]
+    public AudioSource audioSource;
+    public AudioClip outOfBreathSound;
+    [Range(0f, 1f)] public float breathVolume = 0.3f;
+
     private float currentSpeed;
     private float currentStamina;
     private bool canSprint = true;
     private bool isInSprintCooldown = false;
     private bool isMovementLocked = false;
-
     private bool isCrouching = false;
+
+    private bool hasPlayedBreathSound = false;
 
     [HideInInspector]
     public Vector2 moveInput;
 
     private Rigidbody rb;
+
+    // ✅ NEW: lock Y to the starting height forever
+    private float lockedY;
 
     void Start()
     {
@@ -40,10 +49,12 @@ public class PlayerMovement : MonoBehaviour
         rb = GetComponent<Rigidbody>();
         rb.freezeRotation = true;
 
+        // ✅ NEW: record starting Y and freeze Y motion
+        lockedY = rb.position.y;
+        rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotation;
+
         if (playerCamera == null)
-        {
             Debug.LogError("Player camera NOT assigned on PlayerMovement!");
-        }
     }
 
     void Update()
@@ -58,9 +69,7 @@ public class PlayerMovement : MonoBehaviour
         bool isMoving = moveInput.sqrMagnitude > 0.01f;
 
         if (Input.GetKeyDown(KeyCode.LeftControl))
-        {
             isCrouching = !isCrouching;
-        }
 
         if (isCrouching)
         {
@@ -81,6 +90,9 @@ public class PlayerMovement : MonoBehaviour
                 currentStamina = 0f;
                 canSprint = false;
                 isInSprintCooldown = true;
+
+                PlayOutOfBreathSound();
+
                 StartCoroutine(SprintCooldown());
             }
         }
@@ -91,6 +103,10 @@ public class PlayerMovement : MonoBehaviour
             if (!isInSprintCooldown && currentStamina < maxStamina)
             {
                 currentStamina += staminaRegenRate * Time.deltaTime;
+
+                // Reset sound trigger once stamina comes back
+                if (currentStamina > maxStamina * 0.3f)
+                    hasPlayedBreathSound = false;
             }
         }
 
@@ -117,13 +133,32 @@ public class PlayerMovement : MonoBehaviour
         Vector3 targetPos =
             rb.position + moveDir.normalized * currentSpeed * Time.fixedDeltaTime;
 
+        // ✅ NEW: force Y to stay locked (even if something tries to push)
+        targetPos.y = lockedY;
+
         rb.MovePosition(targetPos);
+
+        // ✅ NEW: also kill any leftover vertical velocity just in case
+        Vector3 v = rb.linearVelocity;
+        v.y = 0f;
+        rb.linearVelocity = v;
+    }
+
+    void PlayOutOfBreathSound()
+    {
+        if (audioSource == null || outOfBreathSound == null)
+            return;
+
+        if (hasPlayedBreathSound)
+            return;
+
+        audioSource.PlayOneShot(outOfBreathSound, breathVolume);
+        hasPlayedBreathSound = true;
     }
 
     IEnumerator SprintCooldown()
     {
         yield return new WaitForSeconds(sprintCooldown);
-
         isInSprintCooldown = false;
         canSprint = true;
     }
@@ -141,5 +176,15 @@ public class PlayerMovement : MonoBehaviour
     public float GetStamina01()
     {
         return currentStamina / maxStamina;
+    }
+
+    public bool IsSprinting()
+    {
+        return
+            Input.GetKey(KeyCode.LeftShift) &&
+            canSprint &&
+            !isInSprintCooldown &&
+            moveInput.sqrMagnitude > 0.01f &&
+            !isCrouching;
     }
 }
