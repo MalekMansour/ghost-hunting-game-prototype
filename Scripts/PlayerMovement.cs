@@ -25,6 +25,17 @@ public class PlayerMovement : MonoBehaviour
     public AudioClip outOfBreathSound;
     [Range(0f, 1f)] public float breathVolume = 0.3f;
 
+    // ✅ NEW: Anti-slide lock
+    [Header("Anti-Slide")]
+    [Tooltip("If no input and Rigidbody is drifting, freeze X/Z so player can't slide.")]
+    public bool preventSlidingWhenNoInput = true;
+
+    [Tooltip("How fast you must be drifting (XZ) before we lock. (Try 0.05 to 0.2)")]
+    public float slideVelocityThreshold = 0.08f;
+
+    [Tooltip("How long there must be no input before we lock (prevents locking during tiny stops).")]
+    public float noInputLockDelay = 0.05f;
+
     private float currentSpeed;
     private float currentStamina;
     private bool canSprint = true;
@@ -39,8 +50,12 @@ public class PlayerMovement : MonoBehaviour
 
     private Rigidbody rb;
 
-    // ✅ NEW: lock Y to the starting height forever
+    // ✅ lock Y to the starting height forever
     private float lockedY;
+
+    // ✅ NEW anti-slide state
+    private float noInputTimer = 0f;
+    private bool slideLockedXZ = false;
 
     void Start()
     {
@@ -49,8 +64,9 @@ public class PlayerMovement : MonoBehaviour
         rb = GetComponent<Rigidbody>();
         rb.freezeRotation = true;
 
-        // ✅ NEW: record starting Y and freeze Y motion
         lockedY = rb.position.y;
+
+        // Keep your constraint behavior
         rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotation;
 
         if (playerCamera == null)
@@ -104,7 +120,6 @@ public class PlayerMovement : MonoBehaviour
             {
                 currentStamina += staminaRegenRate * Time.deltaTime;
 
-                // Reset sound trigger once stamina comes back
                 if (currentStamina > maxStamina * 0.3f)
                     hasPlayedBreathSound = false;
             }
@@ -119,6 +134,12 @@ public class PlayerMovement : MonoBehaviour
             camPos.y = Mathf.Lerp(camPos.y, targetHeight, Time.deltaTime * camSmoothSpeed);
             playerCamera.localPosition = camPos;
         }
+
+        // ✅ NEW: If player gives input again, instantly unlock XZ
+        if (preventSlidingWhenNoInput && slideLockedXZ && moveInput.sqrMagnitude > 0.01f)
+        {
+            UnlockXZ();
+        }
     }
 
     void FixedUpdate()
@@ -126,6 +147,7 @@ public class PlayerMovement : MonoBehaviour
         if (isMovementLocked)
             return;
 
+        // --- Your original movement ---
         Vector3 moveDir =
             transform.right * moveInput.x +
             transform.forward * moveInput.y;
@@ -133,15 +155,83 @@ public class PlayerMovement : MonoBehaviour
         Vector3 targetPos =
             rb.position + moveDir.normalized * currentSpeed * Time.fixedDeltaTime;
 
-        // ✅ NEW: force Y to stay locked (even if something tries to push)
+        // Keep Y locked
         targetPos.y = lockedY;
 
-        rb.MovePosition(targetPos);
+        // ✅ NEW: anti-slide logic
+        if (preventSlidingWhenNoInput)
+        {
+            bool hasInput = moveInput.sqrMagnitude > 0.01f;
 
-        // ✅ NEW: also kill any leftover vertical velocity just in case
+            if (!hasInput)
+            {
+                noInputTimer += Time.fixedDeltaTime;
+
+                // Only lock after a tiny delay
+                if (noInputTimer >= noInputLockDelay)
+                {
+                    // drift check on XZ
+                    Vector3 v = rb.linearVelocity;
+                    float xzSpeed = new Vector2(v.x, v.z).magnitude;
+
+                    if (!slideLockedXZ && xzSpeed > slideVelocityThreshold)
+                    {
+                        LockXZ(); // freeze X/Z so physics can't slide you
+                    }
+                }
+            }
+            else
+            {
+                noInputTimer = 0f;
+                // if we had locked, Update() also unlocks immediately, but this is extra-safe
+                if (slideLockedXZ)
+                    UnlockXZ();
+            }
+
+            // If locked, don't MovePosition (since X/Z are frozen anyway)
+            if (!slideLockedXZ)
+            {
+                rb.MovePosition(targetPos);
+            }
+        }
+        else
+        {
+            rb.MovePosition(targetPos);
+        }
+
+        // Your vertical velocity kill
+        Vector3 vel = rb.linearVelocity;
+        vel.y = 0f;
+        rb.linearVelocity = vel;
+    }
+
+    void LockXZ()
+    {
+        slideLockedXZ = true;
+
+        // Freeze X/Z in addition to your existing constraints
+        rb.constraints =
+            RigidbodyConstraints.FreezePositionX |
+            RigidbodyConstraints.FreezePositionZ |
+            RigidbodyConstraints.FreezePositionY |
+            RigidbodyConstraints.FreezeRotation;
+
+        // Kill sideways velocity immediately
         Vector3 v = rb.linearVelocity;
-        v.y = 0f;
+        v.x = 0f;
+        v.z = 0f;
         rb.linearVelocity = v;
+    }
+
+    void UnlockXZ()
+    {
+        slideLockedXZ = false;
+        noInputTimer = 0f;
+
+        // Go back to your original constraints
+        rb.constraints =
+            RigidbodyConstraints.FreezePositionY |
+            RigidbodyConstraints.FreezeRotation;
     }
 
     void PlayOutOfBreathSound()
