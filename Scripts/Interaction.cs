@@ -13,6 +13,10 @@ public class Interaction : MonoBehaviour
     [Header("Sinks")]
     public LayerMask sinkHandleLayer;
 
+    // ✅ NEW: Generic Interactables (Layer = Interactable)
+    [Header("Generic Interactables")]
+    public LayerMask interactableLayer;
+
     [Header("Hold Point")]
     public Transform worldHoldPoint;
 
@@ -28,7 +32,6 @@ public class Interaction : MonoBehaviour
     private Collider itemCollider;
 
     private PlayerInventory inventory;
-
     private PlayerRaycaster raycaster;
 
     void Start()
@@ -46,16 +49,20 @@ public class Interaction : MonoBehaviour
     {
         HandleCrosshair();
 
-        // ✅ LEFT CLICK = Interact (Sink)
+        // ✅ LEFT CLICK = Interact (Sink + Generic Interactables)
         if (Input.GetMouseButtonDown(0))
         {
-            TrySink();
+            // Try sinks first (specific)
+            if (TrySink())
+                return;
+
+            // Then generic interactables
+            TryGenericInteractable();
         }
 
-        // ✅ E = Grab / Door
+        // ✅ E = Door / Pickup (unchanged)
         if (Input.GetKeyDown(KeyCode.E))
         {
-            // Doors first, then pickup (your original behavior)
             if (!TryDoor())
                 TryPickup();
         }
@@ -74,7 +81,7 @@ public class Interaction : MonoBehaviour
         if (cam == null || inventory == null)
             return;
 
-        // Check if holding an item in hand (equipped)
+        // Holding item logic (unchanged)
         bool holdingItem = inventory.GetCurrentItem() != null;
 
         if (holdingItem)
@@ -84,30 +91,31 @@ public class Interaction : MonoBehaviour
 
             if (usable != null && usable.CanUse(cam))
             {
-                // Show interact crosshair if the held item can be used on something
                 crosshairDefault?.SetActive(false);
                 crosshairInteract?.SetActive(true);
                 grabCrosshair?.SetActive(false);
                 return;
             }
 
-            // Holding an item but cannot use it
             crosshairDefault?.SetActive(true);
             crosshairInteract?.SetActive(false);
             grabCrosshair?.SetActive(false);
             return;
         }
 
-        // Not holding anything, normal checks
+        // Not holding anything: check what we're looking at
         Ray ray = new Ray(cam.transform.position, cam.transform.forward);
 
         bool hitItem = Physics.Raycast(ray, interactDistance, itemLayer);
         bool hitDoor = Physics.Raycast(ray, interactDistance, doorLayer);
 
-        // ✅ Sink handle shows INTERACT crosshair (not grab)
+        // ✅ Sink handle shows INTERACT crosshair
         bool hitSink = Physics.Raycast(ray, interactDistance, sinkHandleLayer);
 
-        if (hitSink)
+        // ✅ NEW: Any object on Interactable layer shows INTERACT crosshair
+        bool hitGenericInteract = Physics.Raycast(ray, interactDistance, interactableLayer);
+
+        if (hitSink || hitGenericInteract)
         {
             crosshairDefault?.SetActive(false);
             crosshairInteract?.SetActive(true);
@@ -141,6 +149,25 @@ public class Interaction : MonoBehaviour
         return true;
     }
 
+    // ✅ NEW: Generic interactable interaction (LEFT CLICK calls this)
+    bool TryGenericInteractable()
+    {
+        if (cam == null)
+            return false;
+
+        Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+
+        if (!Physics.Raycast(ray, out RaycastHit hit, interactDistance, interactableLayer))
+            return false;
+
+        IInteractable interactable = hit.collider.GetComponentInParent<IInteractable>();
+        if (interactable == null)
+            return false;
+
+        interactable.Interact();
+        return true;
+    }
+
     // ✅ Door interaction (E calls this)
     bool TryDoor()
     {
@@ -165,7 +192,6 @@ public class Interaction : MonoBehaviour
         if (worldHoldPoint == null || inventory == null)
             return;
 
-        // Only pick up if hands are empty
         if (!inventory.IsHandsEmpty())
             return;
 
@@ -178,16 +204,13 @@ public class Interaction : MonoBehaviour
         if (item == null)
             return;
 
-        // Reset dropped state so impact sound + physics work again later
         Dropped dropped = item.GetComponent<Dropped>();
         if (dropped != null)
             dropped.ResetDropped();
 
-        // Try to add to inventory
         if (!inventory.TryAddItem(item))
             return;
 
-        // Track held world item (for crosshair / interaction logic)
         worldItem = item.gameObject;
     }
 
@@ -195,7 +218,6 @@ public class Interaction : MonoBehaviour
     {
         worldItem = item;
 
-        // Prevent re-pickup
         originalLayer = worldItem.layer;
         worldItem.layer = LayerMask.NameToLayer("Ignore Raycast");
 
@@ -227,12 +249,10 @@ public class Interaction : MonoBehaviour
         if (inventory == null)
             return;
 
-        // Drop the currently equipped item in inventory
         InventoryItem currentItem = inventory.GetCurrentItem();
         if (currentItem == null)
             return;
 
-        // Restore physics
         Rigidbody rb = currentItem.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -246,14 +266,11 @@ public class Interaction : MonoBehaviour
         if (col != null)
             col.enabled = true;
 
-        // Detach from hand
         currentItem.transform.SetParent(null);
         currentItem.gameObject.SetActive(true);
 
-        // Remove from inventory
         inventory.DropCurrent();
 
-        // Reset worldItem reference
         worldItem = null;
         itemCollider = null;
     }
