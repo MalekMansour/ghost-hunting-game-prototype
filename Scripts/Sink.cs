@@ -175,7 +175,6 @@ public class Sink : MonoBehaviour
             Vector3 current = waterSurface.localScale;
             current.x = s.x;
             current.z = s.z;
-            // keep Y unchanged (flat plane thickness)
             waterSurface.localScale = current;
         }
         else
