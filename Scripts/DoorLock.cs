@@ -63,7 +63,6 @@ public class DoorLock : MonoBehaviour
         isLocked = false;
     }
 
-    // 🔴 These are for your ghost system later
     public void Lock()
     {
         isLocked = true;
