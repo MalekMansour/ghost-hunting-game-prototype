@@ -18,97 +18,75 @@ Potential Future Maps:
 Ghosts:
 
 1 - Glare:
-A Ghost that is attracted to light.
-Does light related events 25% more often.
-Cannot turn off lights.
-Cannot blow out candles.
-Higher chance of hunting at 50% sanity and lower.
+A Ghost that is attracted to light. Will do light related ghost events more often. Cannot turn off lights. Cannot blow out candles. Has a higher chance of doing ghost events when a flashlight is shined at them. Higher chance of hunting at 50% sanity and lower. 
 
 2 - Unbreon
-A Ghost that is attracted to darkness.
-Cannot turn on lights.
-Will turns off lights more often.
-Will blow out candles more often.
-Has a higher chance of hunting at 50% sanity and lower.
+A Ghost that is attracted to darkness. Cannot turn on lights. Will turns off lights more often. Will blow out candles more often. Has a higher chance of hunting when a flashlight is shined at them. Has a higher chance of hunting at 50% sanity and lower.
 
-3 - Flare
-A Ghost that is attracted to heat and fire.
-Cannot blow out candles.
-Cannot do apparitions in cold rooms.
+3 - Pyro 
+A Ghost that is attracted to heat and fire. Cannot blow out candles.
 Has a higher chance of hunting at 60% sanity and lower.
 
-4 - Frost
-A Ghost attracted to the cold.
-Cannot do apparitions in hot rooms.
-Higher chance of hunting at 40% sanity and lower.
+4 - Stray
+A Ghost attracted to the cold. Higher chance of hunting at 40% sanity and lower.
 
 5 - Echoe
-A Ghost that is attracted to sound.
-Does sound related events 25% more often.
-Does apparitions 10% more often.
-Is more likely to do a hunt when players talk near it (sound of 80% and more) by 25%.
-Has a higher chance of hunting at 70% sanity and lower.
+A blind Ghost that is attracted to sound. Does sound related events more often. Will do more ghost events if the player speaks near it. Has a higher chance of hunting at 50% sanity and lower.
 
 6 - Husher
-A Ghost that is attracted to silence.
-Does apparition less often than others.
-Cannot do any sound related ghost events.
-Is more likely to do a hunt when players talk loudly near it (sound of 100%) by 40%.
-Has a higher chance of hunting at 30% sanity and lower.
+A Ghost that is attracted to silence. Will try staying around quiet rooms like padded cells. Cannot do any sound related ghost events. Is more likely to hunt when players talk loudly. Has a higher chance of hunting at 40% sanity and lower. When hostile, will get faster the louder the player is and will get slower the quieter the player is.
 
 7 - Reeker
-A Ghost that is attracted to bad smell.
-Has a higher chance of hunting at 50% and lower.
+A Ghost that is attracted to bad smell. Has a higher chance of hunting at 50% and lower.
 
 8 - Poltergeist 
-A Ghost that is attracted to messes (piles of objects).
-Will touch and throw objects 50% more often than others.
-Has a higher chance of hunting at 20%-60% sanity.
+A Ghost that is attracted to messes (piles of objects). Will touch and throw objects way more often than others. Has a higher chance of hunting at 50% sanity and lower.
 
 9 - Forsaken
-A Ghost that is attracted to lonely players. Will always follow lonely players. Will run away from groups of people and will sometimes mistake mannequins for real people.
-Will do apparitions 50% less than others.
-Cannot do ghost events near multiple players.
-Will do 25% more ghost events near lonely players.
-Will hunt ONLY near lonely players and will only hunt at 40% sanity and lower.
+A Ghost that is attracted to lonely players. Will always follow lonely players. Will run away from groups of people. Will do apparitions less often than others. Cannot do ghost events near multiple players. Will do more ghost events near lonely players. Will hunt ONLY near lonely players and will ONLY hunt at 40% sanity and lower.
 
 10 - Shade
-A ghost that can’t perform any ghost events near any players and will roam around in a very small radius.
-Will do 50% less apparitions than others.
-Can only hunt at 20% sanity and lower.
+A ghost that can’t perform any ghost events near any players and will roam around in a very small radius. The shade will pick one room and stay in that room forever unless it gets crowded or too loud. Will do way less apparitions than others. Can ONLY hunt at 20% sanity and lower. When hostile, will actually stop hunting if the player is being too loud.
 
 11 - Mimic
-A Ghost that will copy other ghost behaviors and changes every minute.
+A Ghost that will copy other ghost behaviors and changes every 2 - 3 minutes. Only their behaviors and their hunts and speeds, not their models.
 
 12 - Wrath
-Demon like ghost that is very aggressive.
-Can hunt back to back with very short cooldowns.
-Has a 25% more chance of doing ghost events.
-Will do apparitions 25% more often.
-Will do red room ghost events 10% more often.
-Has a higher chance of hunting at 50%-100% sanity.
+Demon-like ghost that is very aggressive. Can hunt back to back with very short cooldowns. Has a higher chance of doing ghost events. Will do apparitions more often. Will do red room ghost events more often. Has a high chance of hunting at both high sanity and low sanity. It’s only goal is to watch you die.
 
 13 - Llorona
-A Ghost attracted to water.
-Has a higher chance of turning on sinks and showers.
-Wil get slightly more aggressive when sinks are turned off.
-Has a higher chance of hunting at 60% sanity and lower. 
-Has a special very rare unique scream.
-
+Female model only ghost. A Ghost attracted to water. Has a higher chance of turning on sinks. Will get slightly more aggressive when sinks are turned off. Has a higher chance of hunting at 50% sanity and lower. Has a special very rare unique scream.
 
 14 - Doppelgänger
-A ghost that always roams around the player and repeats what the player says to the other players in the game. They will never find their own room, always following players.
-Have a higher chance of attacking when being looked at. 
+A ghost that always roams around the player and repeats what the player says to the other players in the game. They will never find their own room, always following players. Have a higher chance of attacking when being looked at. Has a higher chance of hunting at 70% sanity and lower.
 
-15 - TBD
+15 - Prowler
+A ghost that will follow random players around and stay still when being looked at and moves faster when unseen. When hostile, the prowler will get slower when looked at and moves a lot faster when it’s not being watched. Has a higher chance of hunting at 60% sanity and lower.
 
 16 Mazzikin
-An invisible ghost that isnt attracted to anything but will always be invisible but will do more ghost events.
+An invisible ghost that isn't attracted to anything but will always be invisible but will do more ghost events. Will also be invisible during hunts. Has a higher chance of hunting at 40% sanity and lower. 
 
-OTHER POSSIBLE GHOST IDEAS:
-Coilhead like ghost that only moves when you’re not looking. Won’t move as much if you look at it.
+POSSIBLE GHOST IDEAS:
+Twin Sisters
+2 Ghosts, Same Model, both roaming in the map. Can only be female models.
 
-A ghost that becomes more active when players run.
+Hansha
+A teleporting ghost that will teleport around the map. Can even teleport during hunts and will try teleporting in front of the player.
+
+Ghoul
+During hunts, this ghost will always remain visible without blinking. It will try following players who aren’t holding any items in their hands.
+
+Nightmare
+A ghost that will often be hostile and ignore all crucifixes. Has a special ability of faking a hunt. The ghost can start chasing you and then disappear at the last second before it touches you without draining any sanity.
+
+Succubus
+Can only be a female model. Can only hunt female characters and will be passive near male characters. Will never hunt male characters and will try following male characters.
+
+Mirage
+A ghost that can create copies of himself. Can only be a male model. Can create up to 4 different copies of himself at once. Those copies can’t hunt or do any ghost events; they are just hallucinations.
+
+
+
 
 Characters:
 
