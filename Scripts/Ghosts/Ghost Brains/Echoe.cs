@@ -1,10 +1,30 @@
 using UnityEngine;
 using System.Collections;
+using System.Collections.Generic;
 
 public class Echoe : MonoBehaviour
 {
     [Header("References")]
     public GhostMovement movement;
+
+    // ✅ NEW: GhostEvent reference (same ghost)
+    [Header("Ghost Event Boost (Mic Loudness)")]
+    public GhostEvent ghostEvent;
+
+    [Tooltip("Mic must be >= this (0..1). 0.8 = 80%.")]
+    [Range(0f, 1f)] public float micThreshold01 = 0.8f;
+
+    [Tooltip("Increase GhostEvent global chance by this amount while any mic is above threshold.")]
+    [Range(0f, 1f)] public float eventChanceBoost = 0.25f;
+
+    [Tooltip("How often we check mic loudness (seconds).")]
+    public float micCheckInterval = 0.15f;
+
+    [Tooltip("How often we refresh player MicInput list (seconds).")]
+    public float micRefreshInterval = 2.0f;
+
+    private float baseEventChance = -1f;
+    private bool micBoostActive = false;
 
     [Header("Hearing")]
     public float hearingRange = 25f;
@@ -28,6 +48,10 @@ public class Echoe : MonoBehaviour
     private Coroutine scanRoutine;
     private Coroutine forceRoutine;
 
+    // ✅ NEW: mic caching
+    private List<MicInput> micInputs = new List<MicInput>();
+    private Coroutine micRoutine;
+
     void Start()
     {
         if (movement == null)
@@ -40,7 +64,24 @@ public class Echoe : MonoBehaviour
             return;
         }
 
+        // ✅ NEW: auto-find GhostEvent on this ghost
+        if (ghostEvent == null)
+            ghostEvent = GetComponent<GhostEvent>();
+
+        if (ghostEvent != null)
+            baseEventChance = ghostEvent.eventChance;
+
         scanRoutine = StartCoroutine(NoiseScanLoop());
+
+        // ✅ NEW: mic boost loop (only if GhostEvent exists)
+        if (ghostEvent != null)
+            micRoutine = StartCoroutine(MicBoostLoop());
+    }
+
+    void OnDisable()
+    {
+        // restore chance if Echoe is disabled (ex: hunt)
+        RestoreGhostEventChance();
     }
 
     IEnumerator NoiseScanLoop()
@@ -52,6 +93,86 @@ public class Echoe : MonoBehaviour
             UpdateTarget();
             yield return wait;
         }
+    }
+
+    // ✅ NEW: Mic boost loop
+    IEnumerator MicBoostLoop()
+    {
+        float nextRefresh = 0f;
+        var wait = new WaitForSeconds(Mathf.Max(0.05f, micCheckInterval));
+
+        while (true)
+        {
+            if (ghostEvent == null)
+                yield break;
+
+            // Refresh MicInputs occasionally (cheaper than FindObjectsOfType every tick)
+            if (Time.time >= nextRefresh)
+            {
+                nextRefresh = Time.time + Mathf.Max(0.2f, micRefreshInterval);
+                RefreshMicInputs();
+            }
+
+            bool anyLoud = IsAnyMicAboveThreshold();
+
+            if (anyLoud && !micBoostActive)
+                ApplyGhostEventBoost();
+            else if (!anyLoud && micBoostActive)
+                RestoreGhostEventChance();
+
+            yield return wait;
+        }
+    }
+
+    void RefreshMicInputs()
+    {
+        micInputs.Clear();
+        MicInput[] found = FindObjectsOfType<MicInput>(true);
+        if (found == null) return;
+
+        for (int i = 0; i < found.Length; i++)
+        {
+            if (found[i] != null && found[i].isActiveAndEnabled)
+                micInputs.Add(found[i]);
+        }
+    }
+
+    bool IsAnyMicAboveThreshold()
+    {
+        // If list is empty, attempt one quick refresh
+        if (micInputs.Count == 0)
+            RefreshMicInputs();
+
+        for (int i = 0; i < micInputs.Count; i++)
+        {
+            MicInput m = micInputs[i];
+            if (m == null || !m.isActiveAndEnabled) continue;
+
+            if (m.CurrentVolume01 >= micThreshold01)
+                return true;
+        }
+
+        return false;
+    }
+
+    void ApplyGhostEventBoost()
+    {
+        if (ghostEvent == null) return;
+
+        if (baseEventChance < 0f)
+            baseEventChance = ghostEvent.eventChance;
+
+        ghostEvent.eventChance = Mathf.Clamp01(baseEventChance + eventChanceBoost);
+        micBoostActive = true;
+    }
+
+    void RestoreGhostEventChance()
+    {
+        if (ghostEvent == null) return;
+        if (baseEventChance < 0f) baseEventChance = ghostEvent.eventChance;
+
+        ghostEvent.eventChance = Mathf.Clamp01(baseEventChance);
+        micBoostActive = false;
     }
 
     void UpdateTarget()
@@ -151,6 +272,5 @@ public class Echoe : MonoBehaviour
             StopCoroutine(forceRoutine);
             forceRoutine = null;
         }
-
     }
 }
