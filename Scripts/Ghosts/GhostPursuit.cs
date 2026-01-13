@@ -20,7 +20,6 @@ public class GhostPursuit : MonoBehaviour
         public bool enabled = true;
     }
 
-    // ✅ NEW: Global hunt event so doors can lock/close during hunts
     public static System.Action<bool> OnHuntStateChanged;
 
     [Header("Hunt Rules (by sanity)")]
