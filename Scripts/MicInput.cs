@@ -20,6 +20,9 @@ public class MicInput : MonoBehaviour
     private float timer;
     private float smoothedVolume;
 
+    // ✅ NEW: lets other scripts read mic loudness (0..1)
+    public float CurrentVolume01 => Mathf.Clamp01(smoothedVolume);
+
     void Start()
     {
         if (Microphone.devices.Length == 0)
@@ -92,4 +95,3 @@ public class MicInput : MonoBehaviour
         return (sum / sampleWindow) * sensitivity;
     }
 }
-
