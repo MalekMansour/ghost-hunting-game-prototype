@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 
 public class GhostEvent : MonoBehaviour
@@ -9,18 +10,24 @@ public class GhostEvent : MonoBehaviour
         GhostSound,
         ItemThrow,
         GhostMist,
-        DoorMovement,
+        DoorMovement,   // (legacy / kept)
         CandleBlowout,
-        SinkToggle,
-        RedLight
+        SinkToggle,     // (legacy / kept)
+        RedLight,
+
+        // ✅ NEW (added at the END so we don’t break existing serialized enum values)
+        DoorOpen,
+        DoorClose,
+        SinkTurnOn,
+        SinkTurnOff
     }
 
-    // -------- NEW: Per-event chance/weight --------
+    // -------- Per-event chance/weight --------
     [System.Serializable]
     public class EventChance
     {
         public AllowedEvent eventType;
-        [Range(0f, 100f)] public float weightPercent = 50f; // 0 = never, 100 = very likely
+        [Range(0f, 100f)] public float weightPercent = 50f; // 0 = never
     }
 
     [Header("Allowed Events")]
@@ -28,10 +35,10 @@ public class GhostEvent : MonoBehaviour
 
     [Header("Event Timing")]
     public float eventCheckInterval = 12f;
-    [Range(0f, 1f)] public float eventChance = 0.6f; // global chance that ANY event happens on a check
+    [Range(0f, 1f)] public float eventChance = 0.6f;
 
     [Header("Per-Event Chance (Weights)")]
-    [Tooltip("Weights only matter among Allowed Events. Example: set GhostSound=80, ItemThrow=20 to bias sounds.")]
+    [Tooltip("Weights only matter among Allowed Events.")]
     public List<EventChance> perEventChances = new List<EventChance>()
     {
         new EventChance(){ eventType = AllowedEvent.GhostSound,    weightPercent = 60f },
@@ -41,27 +48,29 @@ public class GhostEvent : MonoBehaviour
         new EventChance(){ eventType = AllowedEvent.CandleBlowout, weightPercent = 20f },
         new EventChance(){ eventType = AllowedEvent.SinkToggle,    weightPercent = 15f },
         new EventChance(){ eventType = AllowedEvent.RedLight,      weightPercent = 25f },
+
+        // ✅ NEW defaults (you can change in Inspector)
+        new EventChance(){ eventType = AllowedEvent.DoorOpen,      weightPercent = 20f },
+        new EventChance(){ eventType = AllowedEvent.DoorClose,     weightPercent = 20f },
+        new EventChance(){ eventType = AllowedEvent.SinkTurnOn,    weightPercent = 15f },
+        new EventChance(){ eventType = AllowedEvent.SinkTurnOff,   weightPercent = 15f },
     };
 
     [Header("Event Retry")]
-    [Tooltip("If an event fails (no candle found etc), it will try another event up to this many times.")]
     public int maxEventRerolls = 4;
 
     [Header("Player Affect")]
     public float sanityAffectRadius = 12f;
 
     [Header("Sanity Targets (Optional)")]
-    [Tooltip("If you drag player Sanity scripts here, we won't need FindObjectsOfType(). If empty, auto-finds.")]
     public List<Sanity> sanityTargets = new List<Sanity>();
 
     [Header("Event Origin (IMPORTANT)")]
-    [Tooltip("Drag the visible ghost model/root here. This position is used for all event distance checks.")]
     public Transform eventOrigin;
 
     [Header("Player Detection")]
-    [Tooltip("Layer that your player cylinder/capsule is on (ex: Player).")]
     public LayerMask playerLayer;
-    public bool usePlayerLayerDetection = true; 
+    public bool usePlayerLayerDetection = true;
 
     [Header("Ghost Sounds")]
     public AudioSource ghostAudioSource;
@@ -87,10 +96,7 @@ public class GhostEvent : MonoBehaviour
     public GameObject mistObject;
 
     [Header("Don't throw held items")]
-    [Tooltip("If an item is parented under an object whose name contains these words, it won't be thrown.")]
     public string[] heldParentNameKeywords = new string[] { "hand", "holdpoint" };
-
-    [Tooltip("Extra safety: don't throw items that are extremely close to the player's camera.")]
     public float dontThrowNearPlayerDistance = 1.2f;
 
     [Header("Door Movement")]
@@ -100,61 +106,62 @@ public class GhostEvent : MonoBehaviour
     public LayerMask sinkLayer;
 
     [Header("Candle Blowout")]
-    [Tooltip("Layer(s) that count as CANDLE FLAMES (flame needs a collider).")]
     public LayerMask candleLayer;
 
     [Header("Red Light (uses ghost light)")]
-    [Tooltip("If empty, we auto-find a Light on the ghost (self/children).")]
     public Light redLightSource;
-
-    [Tooltip("How many flashes happen.")]
     public int redLightFlashes = 3;
-
-    [Tooltip("Total duration of the effect (seconds).")]
     public float redLightDuration = 1.0f;
-
-    [Tooltip("How bright the flash gets (multiplier).")]
     public float redLightIntensityMultiplier = 1.5f;
 
     [Header("Ghost Mist")]
-    [Tooltip("Particle prefab to spawn on the ghost (ParticleSystem prefab).")]
     public ParticleSystem mistPrefab;
-
-    [Tooltip("Where the mist spawns relative to the ghost.")]
     public Vector3 mistLocalOffset = new Vector3(0f, 0.2f, 0f);
-
-    [Tooltip("How long before the spawned mist object is destroyed.")]
     public float mistLifetime = 2.5f;
-
-    [Tooltip("Optional mist sound clips (plays on ghostAudioSource).")]
     public AudioClip[] mistSoundClips;
-
-    [Range(0f, 2f)]
-    public float mistSoundVolume = 1f;
+    [Range(0f, 2f)] public float mistSoundVolume = 1f;
 
     [Header("Debug")]
     public bool debugLogs = false;
     public bool debugGizmos = true;
     public bool debugSanity = true;
 
-    private const string DifficultyPrefKey = "SelectedDifficulty"; 
+    private const string DifficultyPrefKey = "SelectedDifficulty";
 
-    // Your current values from the file
     private const float SOUND_CASUAL = 3f, SOUND_STANDARD = 5f, SOUND_PRO = 7f, SOUND_LETHAL = 9f;
     private const float THROW_CASUAL = 1f, THROW_STANDARD = 2f, THROW_PRO = 3f, THROW_LETHAL = 4f;
     private const float ENV_CASUAL = 2f, ENV_STANDARD = 4f, ENV_PRO = 6f, ENV_LETHAL = 8f;
+
+    // ✅ CPU/GC: NonAlloc buffers (avoid new arrays every event)
+    [Header("Optimization (NonAlloc Buffers)")]
+    [Tooltip("How many door colliders we can consider at once. If you have lots of doors nearby, raise this.")]
+    public int doorBufferSize = 64;
+
+    [Tooltip("How many sink colliders we can consider at once. If you have lots of sinks nearby, raise this.")]
+    public int sinkBufferSize = 64;
+
+    private Collider[] _doorHits;
+    private Collider[] _sinkHits;
+
+    // ✅ Reflection cache for Door private field "isOpen"
+    private static FieldInfo _doorIsOpenField;
 
     void Awake()
     {
         if (!ghostAudioSource)
             ghostAudioSource = GetComponent<AudioSource>();
 
-        // Red light should be "itself" -> auto-find on ghost if not assigned
         if (!redLightSource)
             redLightSource = GetComponentInChildren<Light>(true);
 
-        // Ensure perEventChances contains all event types at least once (no breaking if list is empty)
         EnsurePerEventChanceDefaults();
+
+        // alloc buffers once
+        _doorHits = new Collider[Mathf.Max(8, doorBufferSize)];
+        _sinkHits = new Collider[Mathf.Max(8, sinkBufferSize)];
+
+        // cache reflection once
+        CacheDoorReflection();
     }
 
     void Start()
@@ -183,7 +190,6 @@ public class GhostEvent : MonoBehaviour
                 continue;
             }
 
-            // NEW: pick weighted event, and if it fails, reroll a few times
             bool succeeded = false;
 
             for (int attempt = 0; attempt < Mathf.Max(1, maxEventRerolls); attempt++)
@@ -211,9 +217,18 @@ public class GhostEvent : MonoBehaviour
             case AllowedEvent.GhostSound:     return DoGhostSound();
             case AllowedEvent.ItemThrow:      return DoItemThrow();
             case AllowedEvent.GhostMist:      return DoGhostMist();
+
+            // legacy
             case AllowedEvent.DoorMovement:   return DoDoorMovement();
-            case AllowedEvent.CandleBlowout:  return DoCandleBlowout();
             case AllowedEvent.SinkToggle:     return DoSinkToggle();
+
+            // new
+            case AllowedEvent.DoorOpen:       return DoDoorOpen();
+            case AllowedEvent.DoorClose:      return DoDoorClose();
+            case AllowedEvent.SinkTurnOn:     return DoSinkTurnOn();
+            case AllowedEvent.SinkTurnOff:    return DoSinkTurnOff();
+
+            case AllowedEvent.CandleBlowout:  return DoCandleBlowout();
             case AllowedEvent.RedLight:       return DoRedLight();
             default: return false;
         }
@@ -246,7 +261,7 @@ public class GhostEvent : MonoBehaviour
     }
 
     // ----------------------------
-    // ITEM THROW (works even if items are normally kinematic)
+    // ITEM THROW
     // ----------------------------
     bool DoItemThrow()
     {
@@ -281,14 +296,12 @@ public class GhostEvent : MonoBehaviour
             if (rb == null || !rb.gameObject.activeInHierarchy)
                 continue;
 
-            // ✅ Don't throw held items
             if (IsHeldByPlayer(rb.transform))
             {
                 Log($"Skip throw (held): {rb.name}");
                 continue;
             }
 
-            // ✅ Extra safety: don't throw items very close to the player's camera
             if (playerCam != null && Vector3.Distance(playerCam.position, rb.worldCenterOfMass) <= dontThrowNearPlayerDistance)
             {
                 Log($"Skip throw (too close to player): {rb.name}");
@@ -437,60 +450,202 @@ public class GhostEvent : MonoBehaviour
     }
 
     // ----------------------------
-    // DOOR MOVEMENT (placeholder)
+    // DOOR EVENTS (NEW)
+    // Rules:
+    // - Ghost can only OPEN closed doors (DoorOpen)
+    // - Ghost can only CLOSE open doors (DoorClose)
+    // - Locked doors are ignored
     // ----------------------------
+    bool DoDoorOpen()
+    {
+        Door door = PickValidDoor(matchOpenState: false); // closed doors only
+        if (door == null)
+        {
+            Log("DoorOpen failed: no valid CLOSED unlocked door nearby.");
+            return false;
+        }
+
+        door.Toggle();
+        Log($"DoorOpen -> opened '{door.name}'");
+        DrainSanityNearby(GetEnvDrain(), "DoorOpen");
+        return true;
+    }
+
+    bool DoDoorClose()
+    {
+        Door door = PickValidDoor(matchOpenState: true); // open doors only
+        if (door == null)
+        {
+            Log("DoorClose failed: no valid OPEN unlocked door nearby.");
+            return false;
+        }
+
+        door.Toggle();
+        Log($"DoorClose -> closed '{door.name}'");
+        DrainSanityNearby(GetEnvDrain(), "DoorClose");
+        return true;
+    }
+
+    // legacy (kept): does a “smart” open/close without caring which one
     bool DoDoorMovement()
     {
-        Collider[] hits = Physics.OverlapSphere(transform.position, sanityAffectRadius, doorLayer, QueryTriggerInteraction.Ignore);
-        if (hits == null || hits.Length == 0)
+        // Try close first (scarier sometimes), otherwise open
+        if (DoDoorClose()) return true;
+        if (DoDoorOpen()) return true;
+
+        Log("DoorMovement failed: no valid door nearby.");
+        return false;
+    }
+
+    Door PickValidDoor(bool matchOpenState)
+    {
+        // matchOpenState:
+        // - true  => want OPEN doors
+        // - false => want CLOSED doors
+
+        int count = Physics.OverlapSphereNonAlloc(transform.position, sanityAffectRadius, _doorHits, doorLayer, QueryTriggerInteraction.Ignore);
+        if (count <= 0) return null;
+
+        // Collect candidates without allocating big lists
+        // We do a small pass and pick random by reservoir style.
+        Door chosen = null;
+        int seen = 0;
+
+        for (int i = 0; i < count; i++)
         {
-            Log("DoorMovement failed: no door colliders found in doorLayer within sanityAffectRadius.");
-            return false;
+            Collider c = _doorHits[i];
+            if (!c) continue;
+
+            Door d = c.GetComponentInParent<Door>();
+            if (!d) continue;
+
+            // Locked doors cannot be opened/closed
+            DoorLock lockComp = d.GetComponent<DoorLock>();
+            if (lockComp != null && lockComp.IsLocked())
+                continue;
+
+            if (!TryGetDoorIsOpen(d, out bool isOpen))
+            {
+                // If we can’t read state, we cannot enforce “open only / close only”.
+                // Skip to avoid breaking your rules.
+                continue;
+            }
+
+            if (isOpen != matchOpenState)
+                continue;
+
+            seen++;
+            if (Random.Range(0, seen) == 0)
+                chosen = d;
         }
 
-        Collider pick = hits[Random.Range(0, hits.Length)];
-        Rigidbody rb = pick.attachedRigidbody;
+        return chosen;
+    }
 
-        if (rb != null && !rb.isKinematic)
+    static void CacheDoorReflection()
+    {
+        if (_doorIsOpenField != null) return;
+
+        // private bool isOpen;
+        _doorIsOpenField = typeof(Door).GetField("isOpen", BindingFlags.Instance | BindingFlags.NonPublic);
+    }
+
+    static bool TryGetDoorIsOpen(Door door, out bool isOpen)
+    {
+        isOpen = false;
+        if (door == null) return false;
+
+        CacheDoorReflection();
+        if (_doorIsOpenField == null) return false;
+
+        object val = _doorIsOpenField.GetValue(door);
+        if (val is bool b)
         {
-            Vector3 pushDir = (pick.transform.position - transform.position);
-            pushDir.y = 0f;
-            if (pushDir.sqrMagnitude < 0.01f) pushDir = transform.forward;
-            pushDir.Normalize();
-
-            rb.AddForce(pushDir * 3f, ForceMode.Impulse);
-            Log($"DoorMovement nudged '{pick.name}'");
-        }
-        else
-        {
-            Log($"DoorMovement triggered near '{pick.name}' (no non-kinematic RB to push).");
+            isOpen = b;
+            return true;
         }
 
-        DrainSanityNearby(GetEnvDrain(), "DoorMovement");
-        return true;
+        return false;
     }
 
     // ----------------------------
-    // SINK TOGGLE (placeholder)
+    // SINK EVENTS (NEW)
+    // - SinkTurnOn: only turns ON sinks that are OFF
+    // - SinkTurnOff: only turns OFF sinks that are ON
     // ----------------------------
+    bool DoSinkTurnOn()
+    {
+        Sink sink = PickValidSink(wantOnState: false); // pick OFF sink
+        if (sink == null)
+        {
+            Log("SinkTurnOn failed: no OFF sink nearby.");
+            return false;
+        }
+
+        sink.Toggle();
+        Log($"SinkTurnOn -> turned ON '{sink.name}'");
+        DrainSanityNearby(GetEnvDrain(), "SinkTurnOn");
+        return true;
+    }
+
+    bool DoSinkTurnOff()
+    {
+        Sink sink = PickValidSink(wantOnState: true); // pick ON sink
+        if (sink == null)
+        {
+            Log("SinkTurnOff failed: no ON sink nearby.");
+            return false;
+        }
+
+        sink.Toggle();
+        Log($"SinkTurnOff -> turned OFF '{sink.name}'");
+        DrainSanityNearby(GetEnvDrain(), "SinkTurnOff");
+        return true;
+    }
+
+    // legacy (kept): toggles either direction (tries Off->On first, then On->Off)
     bool DoSinkToggle()
     {
-        Collider[] hits = Physics.OverlapSphere(transform.position, sanityAffectRadius, sinkLayer, QueryTriggerInteraction.Ignore);
-        if (hits == null || hits.Length == 0)
+        if (DoSinkTurnOn()) return true;
+        if (DoSinkTurnOff()) return true;
+
+        Log("SinkToggle failed: no sink nearby.");
+        return false;
+    }
+
+    Sink PickValidSink(bool wantOnState)
+    {
+        // wantOnState:
+        // - true  => want ON sinks
+        // - false => want OFF sinks
+
+        int count = Physics.OverlapSphereNonAlloc(transform.position, sanityAffectRadius, _sinkHits, sinkLayer, QueryTriggerInteraction.Ignore);
+        if (count <= 0) return null;
+
+        Sink chosen = null;
+        int seen = 0;
+
+        for (int i = 0; i < count; i++)
         {
-            Log("SinkToggle failed: no sink colliders found in sinkLayer within sanityAffectRadius.");
-            return false;
+            Collider c = _sinkHits[i];
+            if (!c) continue;
+
+            Sink s = c.GetComponentInParent<Sink>();
+            if (!s) continue;
+
+            if (s.isOn != wantOnState)
+                continue;
+
+            seen++;
+            if (Random.Range(0, seen) == 0)
+                chosen = s;
         }
 
-        Collider pick = hits[Random.Range(0, hits.Length)];
-        Log($"SinkToggle triggered near '{pick.name}' (hook sink script later).");
-
-        DrainSanityNearby(GetEnvDrain(), "SinkToggle");
-        return true;
+        return chosen;
     }
 
     // ----------------------------
-    // CANDLE BLOWOUT (flame is on candleLayer AND must have a collider)
+    // CANDLE BLOWOUT
     // ----------------------------
     bool DoCandleBlowout()
     {
@@ -498,10 +653,9 @@ public class GhostEvent : MonoBehaviour
         if (hits == null || hits.Length == 0)
         {
             Log("CandleBlowout failed: no flame colliders found in candleLayer.");
-            return false; // IMPORTANT: return false so we reroll another event
+            return false;
         }
 
-        // Try a few random flames; if none are lit, fail and reroll a new event
         for (int attempt = 0; attempt < 10; attempt++)
         {
             Collider pick = hits[Random.Range(0, hits.Length)];
@@ -521,15 +675,14 @@ public class GhostEvent : MonoBehaviour
         }
 
         Log("CandleBlowout: flames found but none had a lit Candle parent.");
-        return false; // reroll another event
+        return false;
     }
 
     // ----------------------------
-    // GHOST MIST (your GhostMistFX logic stays; returns success)
+    // GHOST MIST
     // ----------------------------
     bool DoGhostMist()
     {
-        // Find GhostMistFX ONLY if you didn't assign mistObject
         if (mistObject == null)
         {
             mistObject = GameObject.Find("GhostMistFX");
@@ -540,24 +693,18 @@ public class GhostEvent : MonoBehaviour
             }
         }
 
-        // Teleport beside the ghost
         mistObject.transform.position = transform.TransformPoint(mistLocalOffset);
         mistObject.transform.rotation = transform.rotation;
 
-        // Parent temporarily so it follows the ghost
         mistObject.transform.SetParent(transform);
 
-        // Enable if disabled
         if (!mistObject.activeSelf)
             mistObject.SetActive(true);
 
-        // Restart all particle systems cleanly
         ParticleSystem[] systems = mistObject.GetComponentsInChildren<ParticleSystem>(true);
-        bool anySystem = false;
         for (int i = 0; i < systems.Length; i++)
         {
             if (systems[i] == null) continue;
-            anySystem = true;
             systems[i].Clear(true);
             systems[i].Play(true);
         }
@@ -567,7 +714,6 @@ public class GhostEvent : MonoBehaviour
 
         Log($"GhostMist triggered using '{mistObject.name}' for {mistLifetime:0.00}s");
 
-        // Play mist noise ON THE GHOST
         if (ghostAudioSource != null && mistSoundClips != null && mistSoundClips.Length > 0)
         {
             ghostAudioSource.volume = mistSoundVolume;
@@ -576,8 +722,6 @@ public class GhostEvent : MonoBehaviour
         }
 
         DrainSanityNearby(GetEnvDrain(), "GhostMist");
-
-        // If it had no particles at all, still count as success (since you said it shouldn't care)
         return true;
     }
 
@@ -600,7 +744,7 @@ public class GhostEvent : MonoBehaviour
     }
 
     // ----------------------------
-    // RED LIGHT (ghost light flashes red)
+    // RED LIGHT
     // ----------------------------
     bool DoRedLight()
     {
@@ -649,39 +793,70 @@ public class GhostEvent : MonoBehaviour
     }
 
     // ----------------------------
-    // SANITY DRAIN (FIXED + DEBUG)
+    // SANITY DRAIN
     // ----------------------------
     void DrainSanityNearby(float percent, string reason)
-{
-    if (percent <= 0f) return;
-
-    Vector3 gpos = GetEventPos();
-    bool affected = false;
-
-    // BEST: detect the actual player cylinder/collider
-    if (usePlayerLayerDetection)
     {
-        Collider[] cols = Physics.OverlapSphere(gpos, sanityAffectRadius, playerLayer, QueryTriggerInteraction.Ignore);
-        if (cols == null || cols.Length == 0)
+        if (percent <= 0f) return;
+
+        Vector3 gpos = GetEventPos();
+        bool affected = false;
+
+        if (usePlayerLayerDetection)
         {
-            if (debugSanity) Log($"SanityDrain [{reason}] -> No PLAYER colliders in radius {sanityAffectRadius:0.0}. GhostPos={gpos}");
+            Collider[] cols = Physics.OverlapSphere(gpos, sanityAffectRadius, playerLayer, QueryTriggerInteraction.Ignore);
+            if (cols == null || cols.Length == 0)
+            {
+                if (debugSanity) Log($"SanityDrain [{reason}] -> No PLAYER colliders in radius {sanityAffectRadius:0.0}. GhostPos={gpos}");
+                return;
+            }
+
+            for (int i = 0; i < cols.Length; i++)
+            {
+                Collider c = cols[i];
+                if (c == null) continue;
+
+                Sanity s = c.GetComponentInParent<Sanity>();
+                if (s == null) s = c.GetComponentInChildren<Sanity>();
+
+                if (s == null || !s.isActiveAndEnabled)
+                {
+                    if (debugSanity) Log($"SanityDrain [{reason}] -> Found player collider '{c.name}' but no enabled Sanity in parent/children.");
+                    continue;
+                }
+
+                float before = s.sanity;
+                s.DrainSanity(percent);
+                float after = s.sanity;
+
+                affected = true;
+
+                if (debugSanity)
+                {
+                    float d = Vector3.Distance(gpos, c.bounds.center);
+                    Log($"SanityDrain [{reason}] -> HIT '{s.name}' via '{c.name}' dist={d:0.0} -{percent}% ({before:0.0}->{after:0.0}) GhostPos={gpos}");
+                }
+            }
+
+            if (!affected && debugSanity)
+                Log($"SanityDrain [{reason}] -> Player colliders were in range, but no Sanity component found/enabled.");
             return;
         }
 
-        for (int i = 0; i < cols.Length; i++)
+        List<Sanity> players = GetSanityTargets();
+        if (players == null || players.Count == 0)
         {
-            Collider c = cols[i];
-            if (c == null) continue;
+            if (debugSanity) Log($"SanityDrain [{reason}] -> No Sanity targets found.");
+            return;
+        }
 
-            // Find Sanity anywhere on that player's hierarchy
-            Sanity s = c.GetComponentInParent<Sanity>();
-            if (s == null) s = c.GetComponentInChildren<Sanity>();
+        for (int i = 0; i < players.Count; i++)
+        {
+            Sanity s = players[i];
+            if (s == null || !s.isActiveAndEnabled) continue;
 
-            if (s == null || !s.isActiveAndEnabled)
-            {
-                if (debugSanity) Log($"SanityDrain [{reason}] -> Found player collider '{c.name}' but no enabled Sanity in parent/children.");
-                continue;
-            }
+            float d = Vector3.Distance(gpos, s.transform.root.position);
+            if (d > sanityAffectRadius) continue;
 
             float before = s.sanity;
             s.DrainSanity(percent);
@@ -690,80 +865,25 @@ public class GhostEvent : MonoBehaviour
             affected = true;
 
             if (debugSanity)
-            {
-                float d = Vector3.Distance(gpos, c.bounds.center);
-                Log($"SanityDrain [{reason}] -> HIT '{s.name}' via '{c.name}' dist={d:0.0} -{percent}% ({before:0.0}->{after:0.0}) GhostPos={gpos}");
-            }
+                Log($"SanityDrain [{reason}] -> '{s.name}' dist={d:0.0} -{percent}% ({before:0.0}->{after:0.0}) GhostPos={gpos}");
         }
 
-        if (!affected && debugSanity)
-            Log($"SanityDrain [{reason}] -> Player colliders were in range, but no Sanity component found/enabled.");
-        return;
+        if (debugSanity && !affected)
+            Log($"SanityDrain [{reason}] -> No players in radius {sanityAffectRadius:0.0}. GhostPos={gpos}");
     }
 
-    // Fallback: old method (FindObjectsOfType)
-    List<Sanity> players = GetSanityTargets();
-    if (players == null || players.Count == 0)
-    {
-        if (debugSanity) Log($"SanityDrain [{reason}] -> No Sanity targets found.");
-        return;
-    }
-
-    for (int i = 0; i < players.Count; i++)
-    {
-        Sanity s = players[i];
-        if (s == null || !s.isActiveAndEnabled) continue;
-
-        float d = Vector3.Distance(gpos, s.transform.root.position);
-        if (d > sanityAffectRadius) continue;
-
-        float before = s.sanity;
-        s.DrainSanity(percent);
-        float after = s.sanity;
-
-        affected = true;
-
-        if (debugSanity)
-            Log($"SanityDrain [{reason}] -> '{s.name}' dist={d:0.0} -{percent}% ({before:0.0}->{after:0.0}) GhostPos={gpos}");
-    }
-
-    if (debugSanity && !affected)
-        Log($"SanityDrain [{reason}] -> No players in radius {sanityAffectRadius:0.0}. GhostPos={gpos}");
-}
     Vector3 GetEventPos()
-{
-    return (eventOrigin != null) ? eventOrigin.position : transform.position;
-}
-
-Vector3 GetPlayerPositionForSanity(Sanity s)
-{
-    // If you're singleplayer, Camera.main is the best "player position"
-    // BUT only use it if the sanity object is part of the same hierarchy as the camera.
-    if (Camera.main != null)
     {
-        // If the sanity is under the same root as the main camera, use camera position
-        // (good for "in front of me" feel)
-        Transform sanityRoot = s.transform.root;
-        Transform camRoot = Camera.main.transform.root;
-
-        if (sanityRoot == camRoot)
-            return Camera.main.transform.position;
+        return (eventOrigin != null) ? eventOrigin.position : transform.position;
     }
-
-    // Otherwise use the player root (works for most setups)
-    return s.transform.root.position;
-}
 
     List<Sanity> GetSanityTargets()
     {
-        // If you assigned them, use them (fast + reliable)
         if (sanityTargets != null && sanityTargets.Count > 0)
             return sanityTargets;
 
-        // Otherwise auto-find
         Sanity[] found = FindObjectsOfType<Sanity>(true);
         if (found == null || found.Length == 0) return new List<Sanity>();
-
         return new List<Sanity>(found);
     }
 
@@ -811,10 +931,9 @@ Vector3 GetPlayerPositionForSanity(Sanity s)
         return diff;
     }
 
-    // -------- NEW: Weighted picker --------
+    // -------- Weighted picker --------
     AllowedEvent PickWeightedEventFromAllowed()
     {
-        // Build weights only for allowed events
         float total = 0f;
         List<AllowedEvent> choices = new List<AllowedEvent>();
         List<float> weights = new List<float>();
@@ -830,7 +949,6 @@ Vector3 GetPlayerPositionForSanity(Sanity s)
             total += w;
         }
 
-        // If weights are all zero, fallback to uniform random among allowed
         if (choices.Count == 0 || total <= 0.0001f)
             return allowedEvents[Random.Range(0, allowedEvents.Count)];
 
@@ -857,7 +975,6 @@ Vector3 GetPlayerPositionForSanity(Sanity s)
                 return perEventChances[i].weightPercent;
         }
 
-        // If missing from list, default weight
         return 1f;
     }
 
@@ -866,7 +983,6 @@ Vector3 GetPlayerPositionForSanity(Sanity s)
         if (perEventChances == null)
             perEventChances = new List<EventChance>();
 
-        // Make sure each enum exists at least once, so your inspector doesn't “miss” entries
         foreach (AllowedEvent e in System.Enum.GetValues(typeof(AllowedEvent)))
         {
             bool exists = false;
