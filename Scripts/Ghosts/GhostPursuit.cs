@@ -20,6 +20,9 @@ public class GhostPursuit : MonoBehaviour
         public bool enabled = true;
     }
 
+    // ✅ NEW: Global hunt event so doors can lock/close during hunts
+    public static System.Action<bool> OnHuntStateChanged;
+
     [Header("Hunt Rules (by sanity)")]
     public HuntRule[] huntRules;
 
@@ -123,42 +126,18 @@ public class GhostPursuit : MonoBehaviour
     public bool forceVisibleOnTouch = true;
     public float forceVisibleDuration = 0.5f;
 
-    // ------------------------
-    // Attack hit feedback (ringing + muffled + postFX)
-    // ------------------------
     [Header("Attack Hit Feedback (Local Player Only)")]
-    [Tooltip("A ringing/tinnitus clip played on the HIT PLAYER (not globally).")]
     public AudioClip tinnitusClip;
-
-    [Tooltip("Volume for tinnitus clip.")]
     [Range(0f, 2f)] public float tinnitusVolume = 1f;
-
-    [Tooltip("If true, we temporarily add/adjust a LowPassFilter on the hit player to simulate muffled hearing.")]
     public bool enableMuffleOnHit = true;
-
-    [Tooltip("Low-pass cutoff while stunned (lower = more muffled).")]
     public float muffleCutoff = 800f;
-
-    [Tooltip("How long the muffling lasts (defaults to stunDuration if <= 0).")]
     public float muffleDuration = 0f;
 
-    // ------------------------
-    // NEW: Post Processing toggle (DOF + Chromatic) on touch
-    // ------------------------
     [Header("Post Processing On Hit (Depth Of Field + Chromatic)")]
-    [Tooltip("Name of your post processing GameObject under the player (Volume). Example: 'PostProcessing'. If not found, we fall back to any Volume on player/camera.")]
     public string postProcessObjectName = "PostProcessing";
-
-    [Tooltip("How long to keep DOF/Chromatic enabled after getting hit.")]
     public float postFXDuration = 4f;
-
-    [Tooltip("Enable Depth Of Field on hit.")]
     public bool enableDepthOfFieldOnHit = true;
-
-    [Tooltip("Enable Chromatic Aberration on hit.")]
     public bool enableChromaticOnHit = true;
-
-    [Tooltip("Chromatic intensity during hit (0..1). Only used if the override exists in the Volume profile.")]
     [Range(0f, 1f)] public float chromaticHitIntensity = 0.8f;
 
     [Header("Debug")]
@@ -204,7 +183,7 @@ public class GhostPursuit : MonoBehaviour
     private float cachedAngularSpeed;
     private float cachedAcceleration;
 
-    // NEW: postFX coroutine handle so multiple hits don't stack weird
+    // postFX coroutine handle
     private Coroutine postFXRoutine;
 
 #if UNITY_RENDER_PIPELINE_UNIVERSAL || UNITY_RENDER_PIPELINE_HIGH_DEFINITION
@@ -215,7 +194,7 @@ public class GhostPursuit : MonoBehaviour
     private float cachedChromIntensity;
 #endif
 
-    private const string DifficultyPrefKey = "SelectedDifficulty"; // 0 casual,1 standard,2 pro,3 lethal
+    private const string DifficultyPrefKey = "SelectedDifficulty";
 
     void Awake()
     {
@@ -349,33 +328,34 @@ public class GhostPursuit : MonoBehaviour
     }
 
     bool IsPlayerAlive(Transform playerRootOrChild)
-{
-    if (playerRootOrChild == null) return false;
-
-    Transform root = playerRootOrChild.root;
-
-    // 1) If Sanity exists and is dead / 0%, ignore
-    Sanity sanity = root.GetComponentInChildren<Sanity>(true);
-    if (sanity != null)
     {
-        if (!sanity.enabled) return false;
-        if (sanity.sanity <= 0f) return false;
-        if (sanity.IsDead()) return false;
+        if (playerRootOrChild == null) return false;
+
+        Transform root = playerRootOrChild.root;
+
+        Sanity sanity = root.GetComponentInChildren<Sanity>(true);
+        if (sanity != null)
+        {
+            if (!sanity.enabled) return false;
+            if (sanity.sanity <= 0f) return false;
+            if (sanity.IsDead()) return false;
+        }
+
+        Death death = root.GetComponentInChildren<Death>(true);
+        if (death != null && death.IsDead)
+            return false;
+
+        return true;
     }
-
-    // 2) If Death.cs exists and says dead, ignore
-    Death death = root.GetComponentInChildren<Death>(true);
-    if (death != null && death.IsDead)
-        return false;
-
-    return true;
-} 
 
     void StartHunt()
     {
         if (isHunting) return;
         isHunting = true;
         endingFromTouch = false;
+
+        // ✅ NEW: tell doors hunt started
+        OnHuntStateChanged?.Invoke(true);
 
         ResolvePlayerRootAndBodyTarget(force: true);
 
@@ -430,6 +410,9 @@ public class GhostPursuit : MonoBehaviour
         isHunting = false;
 
         Log($"HUNT END ({reason})");
+
+        // ✅ NEW: tell doors hunt ended
+        OnHuntStateChanged?.Invoke(false);
 
         if (agent != null && agent.enabled)
         {
@@ -514,7 +497,7 @@ public class GhostPursuit : MonoBehaviour
             EndHunt("target died");
             return;
         }
-        
+
         if (target == null)
         {
             Log("ChasePlayer: no target.");
@@ -560,7 +543,6 @@ public class GhostPursuit : MonoBehaviour
 
         PlayTouchScream();
 
-        // Local hit feedback (tinnitus + muffle + POSTFX)
         ApplyHitFeedbackToPlayer(playerRootFromHit);
 
         Sanity sanity = playerRootFromHit.GetComponentInChildren<Sanity>(true);
@@ -588,7 +570,6 @@ public class GhostPursuit : MonoBehaviour
 
     void ApplyHitFeedbackToPlayer(Transform playerRootFromHit)
     {
-        // 1) tinnitus/ringing on player's audio source (multiplayer-safe)
         if (tinnitusClip != null)
         {
             AudioSource playerAS = playerRootFromHit.GetComponentInChildren<AudioSource>(true);
@@ -605,7 +586,6 @@ public class GhostPursuit : MonoBehaviour
 
         float durMuffle = (muffleDuration > 0f) ? muffleDuration : stunDuration;
 
-        // 2) muffled audio via LowPass on the player
         if (enableMuffleOnHit)
         {
             AudioLowPassFilter lp = playerRootFromHit.GetComponentInChildren<AudioLowPassFilter>(true);
@@ -614,7 +594,6 @@ public class GhostPursuit : MonoBehaviour
             StartCoroutine(MuffleRoutine(lp, durMuffle));
         }
 
-        // 3) NEW: DOF + Chromatic toggle for 4 seconds
         if (postFXRoutine != null) StopCoroutine(postFXRoutine);
         postFXRoutine = StartCoroutine(PostFXRoutine(playerRootFromHit, Mathf.Max(0.1f, postFXDuration)));
     }
@@ -636,10 +615,6 @@ public class GhostPursuit : MonoBehaviour
     IEnumerator PostFXRoutine(Transform playerRootFromHit, float duration)
     {
 #if UNITY_RENDER_PIPELINE_UNIVERSAL || UNITY_RENDER_PIPELINE_HIGH_DEFINITION
-        // Find a Volume:
-        // 1) named object under player
-        // 2) any Volume under player
-        // 3) any Volume under main camera
         Volume v = null;
 
         if (!string.IsNullOrEmpty(postProcessObjectName))
@@ -657,7 +632,6 @@ public class GhostPursuit : MonoBehaviour
             yield break;
         }
 
-        // Grab overrides
         DepthOfField dof = null;
         ChromaticAberration chrom = null;
 
@@ -670,7 +644,6 @@ public class GhostPursuit : MonoBehaviour
         if (enableChromaticOnHit && !hasChrom)
             Log("POSTFX -> ChromaticAberration override missing in Volume profile (add it).");
 
-        // Cache current values (only once per hit)
         if (enableDepthOfFieldOnHit && hasDOF)
         {
             cachedDOF = dof;
@@ -691,7 +664,6 @@ public class GhostPursuit : MonoBehaviour
 
         yield return new WaitForSeconds(duration);
 
-        // Restore
         if (enableDepthOfFieldOnHit && cachedDOF != null)
             cachedDOF.active = cachedDOFActive;
 
