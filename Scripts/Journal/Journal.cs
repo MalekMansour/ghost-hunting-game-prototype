@@ -23,12 +23,23 @@ public class Journal : MonoBehaviour
     [SerializeField] private RectTransform frontCoverRect;
     [SerializeField] private Button frontCoverButton;
 
-    [Header("Open Book Base (hidden until cover finishes turning)")]
+    [Header("Open Book Base")]
     [SerializeField] private GameObject openBookGO;
     [SerializeField] private GameObject backPagesGO;
     [SerializeField] private GameObject creaseGO;
 
-    [Header("Pages (inside OpenBook)")]
+    [Header("Pages Parent (optional)")]
+    [SerializeField] private GameObject pagesRoot; // your empty "Pages" object (optional)
+
+    [Header("Page Pivots (parents)")]
+    [SerializeField] private GameObject page1Pivot;
+    [SerializeField] private GameObject page2Pivot;
+    [SerializeField] private GameObject page3Pivot;
+    [SerializeField] private GameObject page4Pivot;
+    [SerializeField] private GameObject page5Pivot;
+    [SerializeField] private GameObject page6Pivot;
+
+    [Header("Pages (actual visuals under each pivot)")]
     [SerializeField] private GameObject page1;
     [SerializeField] private GameObject page2;
     [SerializeField] private GameObject page3;
@@ -36,7 +47,7 @@ public class Journal : MonoBehaviour
     [SerializeField] private GameObject page5;
     [SerializeField] private GameObject page6;
 
-    [Header("Navigation Buttons (inside pages)")]
+    [Header("Navigation Buttons")]
     [SerializeField] private Button prevOnPage1; // close book (show cover)
     [SerializeField] private Button nextOnPage2; // -> 3/4
     [SerializeField] private Button prevOnPage3; // -> 1/2
@@ -44,24 +55,25 @@ public class Journal : MonoBehaviour
     [SerializeField] private Button prevOnPage5; // -> 3/4
     [SerializeField] private Button nextOnPage6; // close book (show cover)
 
-    [Header("Flip Overlay (optional)")]
-    [Tooltip("If assigned, this will flip instead of flipping the right page rect.")]
-    [SerializeField] private RectTransform flipOverlayRect;
-    [SerializeField] private GameObject flipOverlayGO;
-
-    [Header("Motion Settings")]
+    [Header("Motion Settings (Cover)")]
     [SerializeField] private float coverSlideX = 40f;
     [SerializeField] private float coverTurnAngleY = -180f;
     [SerializeField] private float coverOpenDuration = 0.22f;
     [SerializeField] private float coverCloseDuration = 0.18f;
 
-    [Header("Page Flip Settings")]
-    [SerializeField] private float pageFlipDuration = 0.22f;
-    [Tooltip("Y rotation used for flipping. -180 usually looks correct.")]
-    [SerializeField] private float pageFlipAngleY = -180f;
+    [Header("Page Flip Settings (Staged Reveal)")]
+    [SerializeField] private float pageFlipDuration = 0.24f;
 
-    [Header("Audio")]
+    [Tooltip("Forward: flips RIGHT page. Usually -180.")]
+    [SerializeField] private float rightPageFlipAngleY = -180f;
+
+    [Tooltip("Backward: flips LEFT page. Usually +180.")]
+    [SerializeField] private float leftPageFlipAngleY = 180f;
+
+    [Header("Audio (Guaranteed 2D)")]
     [SerializeField] private AudioSource audioSource;
+    [SerializeField] private AudioListener listener; // assign Main Camera's AudioListener (optional but recommended)
+    [SerializeField] private float sfxVolume = 1f;
     [SerializeField] private AudioClip openClip;
     [SerializeField] private AudioClip closeClip;
     [SerializeField] private AudioClip flipClip;
@@ -106,7 +118,7 @@ public class Journal : MonoBehaviour
         Hook(nextOnPage6, CloseBookToCover);
 
         if (menuCursorGO) menuCursorGO.SetActive(false);
-        if (flipOverlayGO) flipOverlayGO.SetActive(false);
+        ResetAllPivotRotations();
     }
 
     private void Update()
@@ -154,15 +166,13 @@ public class Journal : MonoBehaviour
         Play(openClip);
 
         frontCoverGO.SetActive(true);
-        openBookGO.SetActive(false);
-        if (flipOverlayGO) flipOverlayGO.SetActive(false);
+        if (openBookGO) openBookGO.SetActive(false);
 
         frontCoverRect.anchoredPosition = coverStartPos;
         frontCoverRect.localRotation = coverClosedRot;
 
         Vector2 slidPos = coverStartPos + new Vector2(coverSlideX, 0f);
 
-        // Slide slightly right
         float t = 0f;
         while (t < 1f)
         {
@@ -172,7 +182,6 @@ public class Journal : MonoBehaviour
             yield return null;
         }
 
-        // Rotate cover
         t = 0f;
         while (t < 1f)
         {
@@ -182,11 +191,13 @@ public class Journal : MonoBehaviour
             yield return null;
         }
 
-        openBookGO.SetActive(true);
+        if (openBookGO) openBookGO.SetActive(true);
         if (backPagesGO) backPagesGO.SetActive(true);
         if (creaseGO) creaseGO.SetActive(true);
+        if (pagesRoot) pagesRoot.SetActive(true);
 
-        ShowSpread(Spread.OneTwo);
+        ResetAllPivotRotations();
+        ShowFullSpread(Spread.OneTwo);
 
         frontCoverGO.SetActive(false);
 
@@ -208,12 +219,11 @@ public class Journal : MonoBehaviour
         Play(closeClip);
 
         SetAllPagesOff();
-        if (flipOverlayGO) flipOverlayGO.SetActive(false);
+        if (pagesRoot) pagesRoot.SetActive(false);
 
         if (backPagesGO) backPagesGO.SetActive(false);
         if (creaseGO) creaseGO.SetActive(false);
-
-        openBookGO.SetActive(false);
+        if (openBookGO) openBookGO.SetActive(false);
 
         frontCoverGO.SetActive(true);
         frontCoverRect.anchoredPosition = coverStartPos + new Vector2(coverSlideX, 0f);
@@ -221,7 +231,6 @@ public class Journal : MonoBehaviour
 
         Vector2 slidPos = coverStartPos + new Vector2(coverSlideX, 0f);
 
-        // Rotate back
         float t = 0f;
         while (t < 1f)
         {
@@ -231,7 +240,6 @@ public class Journal : MonoBehaviour
             yield return null;
         }
 
-        // Slide back
         t = 0f;
         while (t < 1f)
         {
@@ -246,6 +254,8 @@ public class Journal : MonoBehaviour
 
         bookOpen = false;
         currentSpread = Spread.OneTwo;
+        ResetAllPivotRotations();
+
         busy = false;
     }
 
@@ -257,146 +267,156 @@ public class Journal : MonoBehaviour
     }
 
     // =========================
-    // PAGE FLIP
+    // PAGE FLIP (YOUR EXACT REQUEST)
+    // Forward: flip RIGHT page, show NEXT RIGHT immediately, LEFT updates at end
+    // Backward: flip LEFT page, show PREV LEFT immediately, RIGHT updates at end
     // =========================
     private void FlipTo(Spread target)
     {
         if (busy) return;
         if (!bookOpen) return;
 
-        StartExclusive(FlipToRoutine(target));
+        StartExclusive(FlipRoutine_Staged(target));
     }
 
-    private IEnumerator FlipToRoutine(Spread target)
+    private IEnumerator FlipRoutine_Staged(Spread target)
     {
         if (target == currentSpread) yield break;
 
         busy = true;
-
-        // play sound at start (guaranteed)
         Play(flipClip);
 
-        // Prefer overlay if assigned; otherwise flip the RIGHT PAGE rect directly
-        RectTransform flipRect = null;
-        GameObject flipGO = null;
+        bool forward = (int)target > (int)currentSpread;
 
-        if (flipOverlayGO && flipOverlayRect)
+        if (forward) yield return FlipForward(target);
+        else yield return FlipBackward(target);
+
+        busy = false;
+    }
+
+    private IEnumerator FlipForward(Spread target)
+    {
+        // current 1/2 -> target 3/4
+        int curLeft = GetLeftPageIndex(currentSpread);
+        int curRight = GetRightPageIndex(currentSpread);
+        int tarLeft = GetLeftPageIndex(target);
+        int tarRight = GetRightPageIndex(target);
+
+        // Start state: show current spread
+        SetAllPagesOff();
+        SetPageActive(curLeft, true);
+        SetPageActive(curRight, true);
+
+        // IMMEDIATELY show target RIGHT under the flipping right page
+        SetPageActive(tarRight, true);
+
+        // Flip current right pivot
+        RectTransform flipPivot = GetPivotRect(curRight);
+        if (flipPivot == null)
         {
-            flipGO = flipOverlayGO;
-            flipRect = flipOverlayRect;
-            flipGO.SetActive(true);
-            flipRect.localRotation = Quaternion.identity;
-        }
-        else
-        {
-            // fallback: flip the visible right page (2/4/6)
-            flipRect = GetCurrentRightPageRect();
-            if (flipRect != null)
-            {
-                flipRect.localRotation = Quaternion.identity;
-            }
+            // fallback hard switch
+            SetAllPagesOff();
+            SetPageActive(tarLeft, true);
+            SetPageActive(tarRight, true);
+            currentSpread = target;
+            ResetAllPivotRotations();
+            yield break;
         }
 
-        float half = 0.5f;
+        flipPivot.localRotation = Quaternion.identity;
+
         float t = 0f;
-
         while (t < 1f)
         {
             t += Time.unscaledDeltaTime / Mathf.Max(0.0001f, pageFlipDuration);
             float s = EaseInOutCubic(t);
 
-            if (flipRect != null)
-            {
-                float angle = Mathf.Lerp(0f, pageFlipAngleY, s);
-                flipRect.localRotation = Quaternion.Euler(0f, angle, 0f);
-            }
-
-            // swap pages at midpoint
-            if (t >= half && currentSpread != target)
-            {
-                // reset old right page rotation so it doesn't stay rotated if it becomes visible again later
-                ResetCurrentRightPageRotation();
-
-                ShowSpread(target);
-
-                // if we're flipping a real page rect (not overlay), grab the NEW right page and keep flipping
-                if (!(flipOverlayGO && flipOverlayRect))
-                {
-                    flipRect = GetCurrentRightPageRect();
-                    if (flipRect != null)
-                        flipRect.localRotation = Quaternion.Euler(0f, -pageFlipAngleY, 0f); 
-                    // ^ starts “halfway through” feeling like the page completed its arc
-                }
-            }
+            float angle = Mathf.Lerp(0f, rightPageFlipAngleY, s); // usually -180
+            flipPivot.localRotation = Quaternion.Euler(0f, angle, 0f);
 
             yield return null;
         }
 
-        // clean up rotations / overlay
-        if (flipGO != null) flipGO.SetActive(false);
-        ResetCurrentRightPageRotation();
+        // End: NOW update left page (wait until animation finishes)
+        flipPivot.localRotation = Quaternion.identity;
 
-        busy = false;
+        SetAllPagesOff();
+        SetPageActive(tarLeft, true);
+        SetPageActive(tarRight, true);
+
+        currentSpread = target;
+        ResetAllPivotRotations();
     }
 
-    private RectTransform GetCurrentRightPageRect()
+    private IEnumerator FlipBackward(Spread target)
     {
-        GameObject right = null;
-        switch (currentSpread)
+        // current 3/4 -> target 1/2
+        int curLeft = GetLeftPageIndex(currentSpread);
+        int curRight = GetRightPageIndex(currentSpread);
+        int tarLeft = GetLeftPageIndex(target);
+        int tarRight = GetRightPageIndex(target);
+
+        // Start state: show current spread
+        SetAllPagesOff();
+        SetPageActive(curLeft, true);
+        SetPageActive(curRight, true);
+
+        // IMMEDIATELY show target LEFT under the flipping left page
+        SetPageActive(tarLeft, true);
+
+        // Flip current left pivot
+        RectTransform flipPivot = GetPivotRect(curLeft);
+        if (flipPivot == null)
         {
-            case Spread.OneTwo: right = page2; break;
-            case Spread.ThreeFour: right = page4; break;
-            case Spread.FiveSix: right = page6; break;
+            // fallback hard switch
+            SetAllPagesOff();
+            SetPageActive(tarLeft, true);
+            SetPageActive(tarRight, true);
+            currentSpread = target;
+            ResetAllPivotRotations();
+            yield break;
         }
-        return right ? right.GetComponent<RectTransform>() : null;
-    }
 
-    private void ResetCurrentRightPageRotation()
-    {
-        var r = GetCurrentRightPageRect();
-        if (r != null) r.localRotation = Quaternion.identity;
+        flipPivot.localRotation = Quaternion.identity;
+
+        float t = 0f;
+        while (t < 1f)
+        {
+            t += Time.unscaledDeltaTime / Mathf.Max(0.0001f, pageFlipDuration);
+            float s = EaseInOutCubic(t);
+
+            float angle = Mathf.Lerp(0f, leftPageFlipAngleY, s); // usually +180
+            flipPivot.localRotation = Quaternion.Euler(0f, angle, 0f);
+
+            yield return null;
+        }
+
+        // End: NOW update right page (wait until animation finishes)
+        flipPivot.localRotation = Quaternion.identity;
+
+        SetAllPagesOff();
+        SetPageActive(tarLeft, true);
+        SetPageActive(tarRight, true);
+
+        currentSpread = target;
+        ResetAllPivotRotations();
     }
 
     // =========================
-    // SPREAD VISIBILITY
+    // SHOW / HIDE
     // =========================
-    private void ShowSpread(Spread spread)
+    private void ShowFullSpread(Spread spread)
     {
         SetAllPagesOff();
         currentSpread = spread;
 
-        switch (spread)
-        {
-            case Spread.OneTwo:
-                if (page1) page1.SetActive(true);
-                if (page2) page2.SetActive(true);
-                break;
+        int left = GetLeftPageIndex(spread);
+        int right = GetRightPageIndex(spread);
 
-            case Spread.ThreeFour:
-                if (page3) page3.SetActive(true);
-                if (page4) page4.SetActive(true);
-                break;
-
-            case Spread.FiveSix:
-                if (page5) page5.SetActive(true);
-                if (page6) page6.SetActive(true);
-                break;
-        }
+        SetPageActive(left, true);
+        SetPageActive(right, true);
     }
 
-    private void SetAllPagesOff()
-    {
-        if (page1) page1.SetActive(false);
-        if (page2) page2.SetActive(false);
-        if (page3) page3.SetActive(false);
-        if (page4) page4.SetActive(false);
-        if (page5) page5.SetActive(false);
-        if (page6) page6.SetActive(false);
-    }
-
-    // =========================
-    // TAB SHOW/HIDE
-    // =========================
     private void ShowCoverOnlyInstant()
     {
         journalVisible = true;
@@ -405,16 +425,17 @@ public class Journal : MonoBehaviour
         frontCoverRect.anchoredPosition = coverStartPos;
         frontCoverRect.localRotation = coverClosedRot;
 
-        openBookGO.SetActive(false);
+        if (openBookGO) openBookGO.SetActive(false);
         if (backPagesGO) backPagesGO.SetActive(false);
         if (creaseGO) creaseGO.SetActive(false);
+        if (pagesRoot) pagesRoot.SetActive(false);
 
         SetAllPagesOff();
 
-        if (flipOverlayGO) flipOverlayGO.SetActive(false);
-
         bookOpen = false;
         currentSpread = Spread.OneTwo;
+
+        ResetAllPivotRotations();
     }
 
     private void HideAllInstant()
@@ -423,13 +444,11 @@ public class Journal : MonoBehaviour
 
         if (frontCoverGO) frontCoverGO.SetActive(false);
         if (openBookGO) openBookGO.SetActive(false);
-
         if (backPagesGO) backPagesGO.SetActive(false);
         if (creaseGO) creaseGO.SetActive(false);
+        if (pagesRoot) pagesRoot.SetActive(false);
 
         SetAllPagesOff();
-
-        if (flipOverlayGO) flipOverlayGO.SetActive(false);
 
         bookOpen = false;
         busy = false;
@@ -440,6 +459,76 @@ public class Journal : MonoBehaviour
             frontCoverRect.anchoredPosition = coverStartPos;
             frontCoverRect.localRotation = coverClosedRot;
         }
+
+        ResetAllPivotRotations();
+    }
+
+    // =========================
+    // PAGES + PIVOTS
+    // =========================
+    private void SetAllPagesOff()
+    {
+        SetPageActive(1, false);
+        SetPageActive(2, false);
+        SetPageActive(3, false);
+        SetPageActive(4, false);
+        SetPageActive(5, false);
+        SetPageActive(6, false);
+    }
+
+    private void SetPageActive(int pageNumber, bool on)
+    {
+        GameObject pivot = null;
+        GameObject page = null;
+
+        switch (pageNumber)
+        {
+            case 1: pivot = page1Pivot; page = page1; break;
+            case 2: pivot = page2Pivot; page = page2; break;
+            case 3: pivot = page3Pivot; page = page3; break;
+            case 4: pivot = page4Pivot; page = page4; break;
+            case 5: pivot = page5Pivot; page = page5; break;
+            case 6: pivot = page6Pivot; page = page6; break;
+        }
+
+        if (pivot) pivot.SetActive(on);
+        if (page) page.SetActive(on);
+    }
+
+    private RectTransform GetPivotRect(int pageNumber)
+    {
+        GameObject pivot = null;
+        switch (pageNumber)
+        {
+            case 1: pivot = page1Pivot; break;
+            case 2: pivot = page2Pivot; break;
+            case 3: pivot = page3Pivot; break;
+            case 4: pivot = page4Pivot; break;
+            case 5: pivot = page5Pivot; break;
+            case 6: pivot = page6Pivot; break;
+        }
+        return pivot ? pivot.GetComponent<RectTransform>() : null;
+    }
+
+    private int GetLeftPageIndex(Spread s) => s == Spread.OneTwo ? 1 : s == Spread.ThreeFour ? 3 : 5;
+    private int GetRightPageIndex(Spread s) => s == Spread.OneTwo ? 2 : s == Spread.ThreeFour ? 4 : 6;
+
+    private void ResetAllPivotRotations()
+    {
+        ResetPivot(page1Pivot);
+        ResetPivot(page2Pivot);
+        ResetPivot(page3Pivot);
+        ResetPivot(page4Pivot);
+        ResetPivot(page5Pivot);
+        ResetPivot(page6Pivot);
+    }
+
+    private void ResetPivot(GameObject pivot)
+    {
+        if (!pivot) return;
+        var rt = pivot.GetComponent<RectTransform>();
+        if (rt) rt.localRotation = Quaternion.identity;
+        else pivot.transform.localRotation = Quaternion.identity;
     }
 
     // =========================
@@ -457,7 +546,7 @@ public class Journal : MonoBehaviour
 
         if (playerRigidbody && locked)
         {
-            playerRigidbody.linearVelocity = Vector3.zero;
+            playerRigidbody.velocity = Vector3.zero;
             playerRigidbody.angularVelocity = Vector3.zero;
         }
 
@@ -494,21 +583,26 @@ public class Journal : MonoBehaviour
 
     private void Play(AudioClip clip)
     {
-        if (!clip)
-        {
-            // optional: warn once if you want
-            // Debug.LogWarning("[Journal] Missing AudioClip.", this);
-            return;
-        }
+        if (!clip) return;
 
         if (audioSource != null)
         {
+            audioSource.spatialBlend = 0f; // FORCE 2D
+            audioSource.volume = Mathf.Clamp01(sfxVolume);
             audioSource.PlayOneShot(clip);
             return;
         }
 
-        // Fallback if you forgot to assign an AudioSource
-        AudioSource.PlayClipAtPoint(clip, Vector3.zero, 1f);
+        if (listener != null)
+        {
+            AudioSource.PlayClipAtPoint(clip, listener.transform.position, Mathf.Clamp01(sfxVolume));
+            return;
+        }
+
+        if (Camera.main != null)
+        {
+            AudioSource.PlayClipAtPoint(clip, Camera.main.transform.position, Mathf.Clamp01(sfxVolume));
+        }
     }
 
     private static float EaseOutCubic(float t)
