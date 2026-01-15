@@ -19,14 +19,14 @@ public class Journal : MonoBehaviour
     [SerializeField] private bool freezeTime = false;
 
     [Header("Front Cover (CLICK THIS)")]
-    [SerializeField] private GameObject frontCoverGO;       // FrontCover object
-    [SerializeField] private RectTransform frontCoverRect;  // FrontCover RectTransform
-    [SerializeField] private Button frontCoverButton;       // FrontCover Button (optional, can auto-find)
+    [SerializeField] private GameObject frontCoverGO;
+    [SerializeField] private RectTransform frontCoverRect;
+    [SerializeField] private Button frontCoverButton;
 
     [Header("Open Book Base (hidden until cover finishes turning)")]
-    [SerializeField] private GameObject openBookGO;         // OpenBook root (contains pages/backpages/crease)
-    [SerializeField] private GameObject backPagesGO;        // BackPages (inside OpenBook)
-    [SerializeField] private GameObject creaseGO;           // Crease (inside OpenBook)
+    [SerializeField] private GameObject openBookGO;
+    [SerializeField] private GameObject backPagesGO;
+    [SerializeField] private GameObject creaseGO;
 
     [Header("Pages (inside OpenBook)")]
     [SerializeField] private GameObject page1;
@@ -44,30 +44,30 @@ public class Journal : MonoBehaviour
     [SerializeField] private Button prevOnPage5; // -> 3/4
     [SerializeField] private Button nextOnPage6; // close book (show cover)
 
-    [Header("Flip Overlay (optional, for page flip feel)")]
+    [Header("Flip Overlay (optional)")]
+    [Tooltip("If assigned, this will flip instead of flipping the right page rect.")]
     [SerializeField] private RectTransform flipOverlayRect;
     [SerializeField] private GameObject flipOverlayGO;
 
     [Header("Motion Settings")]
-    [Tooltip("How much the FRONT COVER slides right before turning")]
     [SerializeField] private float coverSlideX = 40f;
-
-    [Tooltip("Cover turn angle (180 = full flip). Use +180 or -180 depending on pivot direction.")]
     [SerializeField] private float coverTurnAngleY = -180f;
-
     [SerializeField] private float coverOpenDuration = 0.22f;
     [SerializeField] private float coverCloseDuration = 0.18f;
 
-    [SerializeField] private float pageFlipDuration = 0.18f;
+    [Header("Page Flip Settings")]
+    [SerializeField] private float pageFlipDuration = 0.22f;
+    [Tooltip("Y rotation used for flipping. -180 usually looks correct.")]
+    [SerializeField] private float pageFlipAngleY = -180f;
 
-    [Header("Audio (optional)")]
+    [Header("Audio")]
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private AudioClip openClip;
     [SerializeField] private AudioClip closeClip;
     [SerializeField] private AudioClip flipClip;
 
     // State
-    private bool journalVisible; // cover visible (Tab toggles this)
+    private bool journalVisible;
     private bool bookOpen;
     private bool busy;
     private Spread currentSpread = Spread.OneTwo;
@@ -80,29 +80,24 @@ public class Journal : MonoBehaviour
 
     private void Awake()
     {
-        // Auto-find button if not assigned
         if (frontCoverButton == null && frontCoverGO != null)
             frontCoverButton = frontCoverGO.GetComponent<Button>();
 
         if (frontCoverRect == null && frontCoverGO != null)
             frontCoverRect = frontCoverGO.GetComponent<RectTransform>();
 
-        // Setup starting transforms
         coverStartPos = frontCoverRect.anchoredPosition;
         coverClosedRot = Quaternion.identity;
         coverOpenRot = Quaternion.Euler(0f, coverTurnAngleY, 0f);
 
-        // Start: Journal root ON, but everything inside OFF (your rule)
         HideAllInstant();
 
-        // Wire cover click
         if (frontCoverButton != null)
         {
             frontCoverButton.onClick.RemoveListener(OnCoverClicked);
             frontCoverButton.onClick.AddListener(OnCoverClicked);
         }
 
-        // Wire nav buttons
         Hook(prevOnPage1, CloseBookToCover);
         Hook(nextOnPage2, () => FlipTo(Spread.ThreeFour));
         Hook(prevOnPage3, () => FlipTo(Spread.OneTwo));
@@ -127,7 +122,6 @@ public class Journal : MonoBehaviour
             }
             else
             {
-                // put away journal
                 if (bookOpen)
                     StartExclusive(CloseThenHideAll());
                 else
@@ -154,25 +148,21 @@ public class Journal : MonoBehaviour
     // =========================
     // OPEN / CLOSE
     // =========================
-
-    // OPEN: Slide FRONT COVER slightly right -> rotate 180 -> then show OpenBook + pages
     private IEnumerator OpenBookFromCover()
     {
         busy = true;
         Play(openClip);
 
-        // Ensure cover is visible, openbook is hidden until flip completes
         frontCoverGO.SetActive(true);
         openBookGO.SetActive(false);
         if (flipOverlayGO) flipOverlayGO.SetActive(false);
 
-        // Reset cover pose
         frontCoverRect.anchoredPosition = coverStartPos;
         frontCoverRect.localRotation = coverClosedRot;
 
         Vector2 slidPos = coverStartPos + new Vector2(coverSlideX, 0f);
 
-        // Phase A: slide slightly right
+        // Slide slightly right
         float t = 0f;
         while (t < 1f)
         {
@@ -182,7 +172,7 @@ public class Journal : MonoBehaviour
             yield return null;
         }
 
-        // Phase B: rotate 180 like a door
+        // Rotate cover
         t = 0f;
         while (t < 1f)
         {
@@ -192,14 +182,12 @@ public class Journal : MonoBehaviour
             yield return null;
         }
 
-        // NOW: book is open -> show OpenBook and pages
         openBookGO.SetActive(true);
         if (backPagesGO) backPagesGO.SetActive(true);
         if (creaseGO) creaseGO.SetActive(true);
 
         ShowSpread(Spread.OneTwo);
 
-        // Hide the cover after it finishes turning (so you don't see it behind)
         frontCoverGO.SetActive(false);
 
         bookOpen = true;
@@ -214,13 +202,11 @@ public class Journal : MonoBehaviour
         StartExclusive(CloseBookToCoverRoutine());
     }
 
-    // CLOSE: hide pages -> show cover (already at 180) -> rotate back -> slide back -> hide OpenBook
     private IEnumerator CloseBookToCoverRoutine()
     {
         busy = true;
         Play(closeClip);
 
-        // Hide pages + openbook bits first
         SetAllPagesOff();
         if (flipOverlayGO) flipOverlayGO.SetActive(false);
 
@@ -229,14 +215,13 @@ public class Journal : MonoBehaviour
 
         openBookGO.SetActive(false);
 
-        // Show cover in "open" pose so it can close back
         frontCoverGO.SetActive(true);
         frontCoverRect.anchoredPosition = coverStartPos + new Vector2(coverSlideX, 0f);
         frontCoverRect.localRotation = coverOpenRot;
 
         Vector2 slidPos = coverStartPos + new Vector2(coverSlideX, 0f);
 
-        // Phase A: rotate back to closed
+        // Rotate back
         float t = 0f;
         while (t < 1f)
         {
@@ -246,7 +231,7 @@ public class Journal : MonoBehaviour
             yield return null;
         }
 
-        // Phase B: slide back to original position
+        // Slide back
         t = 0f;
         while (t < 1f)
         {
@@ -287,37 +272,89 @@ public class Journal : MonoBehaviour
         if (target == currentSpread) yield break;
 
         busy = true;
+
+        // play sound at start (guaranteed)
         Play(flipClip);
 
-        // Optional overlay on
+        // Prefer overlay if assigned; otherwise flip the RIGHT PAGE rect directly
+        RectTransform flipRect = null;
+        GameObject flipGO = null;
+
         if (flipOverlayGO && flipOverlayRect)
         {
-            flipOverlayGO.SetActive(true);
-            flipOverlayRect.localRotation = Quaternion.identity;
+            flipGO = flipOverlayGO;
+            flipRect = flipOverlayRect;
+            flipGO.SetActive(true);
+            flipRect.localRotation = Quaternion.identity;
+        }
+        else
+        {
+            // fallback: flip the visible right page (2/4/6)
+            flipRect = GetCurrentRightPageRect();
+            if (flipRect != null)
+            {
+                flipRect.localRotation = Quaternion.identity;
+            }
         }
 
+        float half = 0.5f;
         float t = 0f;
+
         while (t < 1f)
         {
             t += Time.unscaledDeltaTime / Mathf.Max(0.0001f, pageFlipDuration);
             float s = EaseInOutCubic(t);
 
-            if (flipOverlayRect)
+            if (flipRect != null)
             {
-                float angle = Mathf.Lerp(0f, -180f, s);
-                flipOverlayRect.localRotation = Quaternion.Euler(0f, angle, 0f);
+                float angle = Mathf.Lerp(0f, pageFlipAngleY, s);
+                flipRect.localRotation = Quaternion.Euler(0f, angle, 0f);
             }
 
-            // Swap pages at midpoint
-            if (t >= 0.5f && currentSpread != target)
+            // swap pages at midpoint
+            if (t >= half && currentSpread != target)
+            {
+                // reset old right page rotation so it doesn't stay rotated if it becomes visible again later
+                ResetCurrentRightPageRotation();
+
                 ShowSpread(target);
+
+                // if we're flipping a real page rect (not overlay), grab the NEW right page and keep flipping
+                if (!(flipOverlayGO && flipOverlayRect))
+                {
+                    flipRect = GetCurrentRightPageRect();
+                    if (flipRect != null)
+                        flipRect.localRotation = Quaternion.Euler(0f, -pageFlipAngleY, 0f); 
+                    // ^ starts “halfway through” feeling like the page completed its arc
+                }
+            }
 
             yield return null;
         }
 
-        if (flipOverlayGO) flipOverlayGO.SetActive(false);
+        // clean up rotations / overlay
+        if (flipGO != null) flipGO.SetActive(false);
+        ResetCurrentRightPageRotation();
 
         busy = false;
+    }
+
+    private RectTransform GetCurrentRightPageRect()
+    {
+        GameObject right = null;
+        switch (currentSpread)
+        {
+            case Spread.OneTwo: right = page2; break;
+            case Spread.ThreeFour: right = page4; break;
+            case Spread.FiveSix: right = page6; break;
+        }
+        return right ? right.GetComponent<RectTransform>() : null;
+    }
+
+    private void ResetCurrentRightPageRotation()
+    {
+        var r = GetCurrentRightPageRect();
+        if (r != null) r.localRotation = Quaternion.identity;
     }
 
     // =========================
@@ -358,21 +395,20 @@ public class Journal : MonoBehaviour
     }
 
     // =========================
-    // TAB SHOW/HIDE (Journal root stays ON)
+    // TAB SHOW/HIDE
     // =========================
     private void ShowCoverOnlyInstant()
     {
         journalVisible = true;
 
-        // show only cover
         frontCoverGO.SetActive(true);
         frontCoverRect.anchoredPosition = coverStartPos;
         frontCoverRect.localRotation = coverClosedRot;
 
-        // hide open book
         openBookGO.SetActive(false);
         if (backPagesGO) backPagesGO.SetActive(false);
         if (creaseGO) creaseGO.SetActive(false);
+
         SetAllPagesOff();
 
         if (flipOverlayGO) flipOverlayGO.SetActive(false);
@@ -385,7 +421,6 @@ public class Journal : MonoBehaviour
     {
         journalVisible = false;
 
-        // hide everything inside
         if (frontCoverGO) frontCoverGO.SetActive(false);
         if (openBookGO) openBookGO.SetActive(false);
 
@@ -400,7 +435,6 @@ public class Journal : MonoBehaviour
         busy = false;
         currentSpread = Spread.OneTwo;
 
-        // Reset cover pose for next open
         if (frontCoverRect)
         {
             frontCoverRect.anchoredPosition = coverStartPos;
@@ -460,7 +494,21 @@ public class Journal : MonoBehaviour
 
     private void Play(AudioClip clip)
     {
-        if (audioSource && clip) audioSource.PlayOneShot(clip);
+        if (!clip)
+        {
+            // optional: warn once if you want
+            // Debug.LogWarning("[Journal] Missing AudioClip.", this);
+            return;
+        }
+
+        if (audioSource != null)
+        {
+            audioSource.PlayOneShot(clip);
+            return;
+        }
+
+        // Fallback if you forgot to assign an AudioSource
+        AudioSource.PlayClipAtPoint(clip, Vector3.zero, 1f);
     }
 
     private static float EaseOutCubic(float t)
@@ -481,4 +529,3 @@ public class Journal : MonoBehaviour
         return t < 0.5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) / 2f;
     }
 }
-
