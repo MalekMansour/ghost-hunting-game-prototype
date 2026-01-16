@@ -76,6 +76,12 @@ public class Journal : MonoBehaviour
     [SerializeField] private AudioClip closeClip;
     [SerializeField] private AudioClip flipClip;
 
+    // =========================
+    // ADDED: NOTES BLOCKING
+    // =========================
+    [Header("Notes (input blocking)")]
+    [SerializeField] private Notes notes;
+
     private bool journalVisible;
     private bool bookOpen;
     private bool busy;
@@ -86,6 +92,14 @@ public class Journal : MonoBehaviour
     private Quaternion coverOpenRot;
 
     private Coroutine routine;
+
+    // =========================
+    // ADDED: helper (ONLY ADDED)
+    // =========================
+    private bool IsTypingNotes()
+    {
+        return notes != null && notes.IsTyping;
+    }
 
     private void Awake()
     {
@@ -122,6 +136,11 @@ public class Journal : MonoBehaviour
     {
         if (busy) return;
 
+        // =========================
+        // ADDED: block toggle while typing notes
+        // =========================
+        if (IsTypingNotes()) return;
+
         if (Input.GetKeyDown(toggleKey))
         {
             if (!journalVisible)
@@ -144,6 +163,12 @@ public class Journal : MonoBehaviour
     public void OnCoverClicked()
     {
         if (busy) return;
+
+        // =========================
+        // ADDED: block cover click while typing notes
+        // =========================
+        if (IsTypingNotes()) return;
+
         if (!journalVisible) return;
         if (bookOpen) return;
 
@@ -198,6 +223,12 @@ public class Journal : MonoBehaviour
     private void CloseBookToCover()
     {
         if (busy) return;
+
+        // =========================
+        // ADDED: block close button while typing notes
+        // =========================
+        if (IsTypingNotes()) return;
+
         if (!bookOpen) return;
         StartExclusive(CloseBookToCoverRoutine());
     }
@@ -258,6 +289,12 @@ public class Journal : MonoBehaviour
     private void FlipTo(Spread target)
     {
         if (busy || !bookOpen) return;
+
+        // =========================
+        // ADDED: block flip while typing notes
+        // =========================
+        if (IsTypingNotes()) return;
+
         if (target == currentSpread) return;
         StartExclusive(FlipRoutineSimple(target));
     }
@@ -528,7 +565,12 @@ public class Journal : MonoBehaviour
     {
         if (!b) return;
         b.onClick.RemoveAllListeners();
-        b.onClick.AddListener(() => { if (!busy) action(); });
+        b.onClick.AddListener(() =>
+        {
+            if (busy) return;
+            if (IsTypingNotes()) return; // ADDED
+            action();
+        });
     }
 
     private void Play(AudioClip clip)
