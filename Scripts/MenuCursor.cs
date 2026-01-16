@@ -1,36 +1,42 @@
 using UnityEngine;
 
-public class Cursor : MonoBehaviour
+public class MenuCursor : MonoBehaviour
 {
-    [Header("Cursor Settings")]
-    public Texture2D cursorTexture;
+    [Header("Menu Cursor Settings")]
+    [SerializeField] private Texture2D cursorTexture;
 
-    [Tooltip("Cursor hotspot (usually center or top-left)")]
-    public Vector2 hotspot = Vector2.zero;
+    [Tooltip("Exact click point of the cursor (pixel coords from top-left)")]
+    [SerializeField] private Vector2 hotspot = Vector2.zero; // (0,0) = sharp pointer tip
 
-    [Tooltip("Use this for UI menus")]
-    public CursorMode cursorMode = CursorMode.Auto;
+    [SerializeField] private CursorMode cursorMode = CursorMode.Auto;
 
-    void Start()
+    private void OnEnable()
     {
         ApplyCursor();
     }
 
-    void OnEnable()
+    private void OnDisable()
     {
-        ApplyCursor();
+        ResetCursor();
     }
 
-    void ApplyCursor()
+    private void ApplyCursor()
     {
-        if (cursorTexture == null)
+        if (!cursorTexture)
         {
-            Debug.LogWarning("Cursor.cs: No cursor texture assigned.");
+            Debug.LogWarning("MenuCursor: No cursor texture assigned.");
             return;
         }
 
-        UnityEngine.Cursor.SetCursor(cursorTexture, hotspot, cursorMode);
-        UnityEngine.Cursor.visible = true;
-        UnityEngine.Cursor.lockState = CursorLockMode.None;
+        Cursor.SetCursor(cursorTexture, hotspot, cursorMode);
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.None;
+    }
+
+    private void ResetCursor()
+    {
+        Cursor.SetCursor(null, Vector2.zero, cursorMode);
+        Cursor.visible = false;
+        Cursor.lockState = CursorLockMode.Locked;
     }
 }
