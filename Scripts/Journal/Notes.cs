@@ -1,13 +1,17 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 public class Notes : MonoBehaviour
 {
     [Header("References")]
     [SerializeField] private TMP_InputField notesInput;
-    [SerializeField] private RectTransform textViewport; // the visible notes area
+    [SerializeField] private RectTransform textViewport;
 
     private string lastValidText = "";
+
+    public bool IsTyping => notesInput != null && notesInput.isFocused;
+    
 
     private void Awake()
     {
@@ -16,7 +20,7 @@ public class Notes : MonoBehaviour
 
         if (!notesInput)
         {
-            Debug.LogError("[JournalNotes] No TMP_InputField found.");
+            Debug.LogError("[Notes] No TMP_InputField found.");
             enabled = false;
             return;
         }
@@ -25,7 +29,6 @@ public class Notes : MonoBehaviour
             textViewport = notesInput.textViewport;
 
         notesInput.lineType = TMP_InputField.LineType.MultiLineNewline;
-
         lastValidText = notesInput.text;
 
         notesInput.onValueChanged.AddListener(OnTextChanged);
@@ -37,30 +40,54 @@ public class Notes : MonoBehaviour
             notesInput.onValueChanged.RemoveListener(OnTextChanged);
     }
 
+    private void Update()
+    {
+        // If typing and player clicks anywhere outside the input field -> unfocus
+        if (!IsTyping) return;
+
+        if (Input.GetMouseButtonDown(0))
+        {
+            // If click is NOT on the notes input (or its children), unfocus
+            if (!IsPointerOver(notesInput.gameObject))
+                Unfocus();
+        }
+    }
+
+    private bool IsPointerOver(GameObject go)
+    {
+        if (EventSystem.current == null) return false;
+
+        var ped = new PointerEventData(EventSystem.current)
+        {
+            position = Input.mousePosition
+        };
+
+        var results = new System.Collections.Generic.List<RaycastResult>();
+        EventSystem.current.RaycastAll(ped, results);
+
+        for (int i = 0; i < results.Count; i++)
+        {
+            if (results[i].gameObject == go || results[i].gameObject.transform.IsChildOf(go.transform))
+                return true;
+        }
+        return false;
+    }
+
     private void OnTextChanged(string newText)
     {
-        // Force TMP to update layout so sizes are accurate
         Canvas.ForceUpdateCanvases();
 
         TMP_Text textComponent = notesInput.textComponent;
-
-        // Height of rendered text
         float textHeight = textComponent.preferredHeight;
-
-        // Height of the visible notes area
         float viewportHeight = textViewport.rect.height;
 
         if (textHeight <= viewportHeight + 0.5f)
         {
-            // Text still fits → accept
             lastValidText = newText;
         }
         else
         {
-            // Text overflowed → revert
             notesInput.SetTextWithoutNotify(lastValidText);
-
-            // Keep caret at end so it feels natural
             notesInput.caretPosition = lastValidText.Length;
         }
     }
@@ -74,6 +101,8 @@ public class Notes : MonoBehaviour
     public void Unfocus()
     {
         notesInput.DeactivateInputField();
+        // This helps the EventSystem stop thinking we're still editing
+        EventSystem.current?.SetSelectedGameObject(null);
     }
 
     public string GetNotes() => lastValidText;
