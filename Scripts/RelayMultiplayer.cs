@@ -9,7 +9,7 @@ using Unity.Services.Authentication;
 using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
 
-// THIS IS THE MISSING ONE:
+// RelayServerData type lives here
 using Unity.Networking.Transport.Relay;
 
 public class RelayMultiplayer : MonoBehaviour
@@ -48,7 +48,8 @@ public class RelayMultiplayer : MonoBehaviour
 
         LastJoinCode = joinCode;
 
-        RelayServerData relayServerData = new RelayServerData(alloc, "dtls");
+        // ✅ Version-safe way to build RelayServerData
+        RelayServerData relayServerData = AllocationUtils.ToRelayServerData(alloc, "dtls");
         unityTransport.SetRelayServerData(relayServerData);
 
         networkManager.StartHost();
@@ -61,7 +62,8 @@ public class RelayMultiplayer : MonoBehaviour
 
         JoinAllocation joinAlloc = await RelayService.Instance.JoinAllocationAsync(joinCode);
 
-        RelayServerData relayServerData = new RelayServerData(joinAlloc, "dtls");
+        // ✅ Version-safe way to build RelayServerData
+        RelayServerData relayServerData = AllocationUtils.ToRelayServerData(joinAlloc, "dtls");
         unityTransport.SetRelayServerData(relayServerData);
 
         networkManager.StartClient();
