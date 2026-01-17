@@ -48,7 +48,6 @@ public class RelayMultiplayer : MonoBehaviour
 
         LastJoinCode = joinCode;
 
-        // ✅ Version-safe way to build RelayServerData
         RelayServerData relayServerData = AllocationUtils.ToRelayServerData(alloc, "dtls");
         unityTransport.SetRelayServerData(relayServerData);
 
