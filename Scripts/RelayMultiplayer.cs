@@ -9,7 +9,6 @@ using Unity.Services.Authentication;
 using Unity.Services.Relay;
 using Unity.Services.Relay.Models;
 
-// RelayServerData type lives here
 using Unity.Networking.Transport.Relay;
 
 public class RelayMultiplayer : MonoBehaviour
