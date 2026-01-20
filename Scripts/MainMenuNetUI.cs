@@ -1,8 +1,10 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
+using TMPro;
 
 using Unity.Services.Core;
 using Unity.Services.Authentication;
@@ -15,11 +17,26 @@ public class MainMenuNetUI : MonoBehaviour
     [SerializeField] private NetworkManager networkManager;
     [SerializeField] private UnityTransport transport;
 
+    [Header("UI (TextMeshPro)")]
+    [SerializeField] private GameObject connectingPanel;
+    [SerializeField] private TMP_Text connectingText;
+    [SerializeField] private float connectingMinSeconds = 7f;
+
+    [SerializeField] private GameObject hostMenuPanel;
+    [SerializeField] private TMP_Text lobbyCodeText;
+
+    [SerializeField] private TMP_InputField joinCodeInput;
+    [SerializeField] private TMP_Text joinStatusText;
+
+    [Header("Timeouts")]
+    [SerializeField] private float connectTimeoutSeconds = 15f;
+
     public string LastJoinCode { get; private set; }
 
-    // ---- Services/Auth guard (VERSION-SAFE) ----
-    private static Task _initTask;
-    private static bool _initDone;
+    private static Task initTask;
+    private static bool servicesReady;
+
+    private bool busy;
 
     private void Awake()
     {
@@ -28,50 +45,116 @@ public class MainMenuNetUI : MonoBehaviour
 
         if (transport == null && networkManager != null)
             transport = networkManager.GetComponent<UnityTransport>();
+
+        if (networkManager != null)
+            networkManager.RunInBackground = true;
+
+        HookNetcodeEvents();
     }
 
+    private void OnDestroy()
+    {
+        UnhookNetcodeEvents();
+    }
+
+    // ===================== NETCODE EVENTS (DEBUG) =====================
+    private void HookNetcodeEvents()
+    {
+        if (networkManager == null) return;
+
+        networkManager.OnClientConnectedCallback += OnClientConnected;
+        networkManager.OnClientDisconnectCallback += OnClientDisconnected;
+        networkManager.OnTransportFailure += OnTransportFailure;
+
+        Debug.Log("[MainMenuNetUI] Hooked Netcode events.");
+    }
+
+    private void UnhookNetcodeEvents()
+    {
+        if (networkManager == null) return;
+
+        networkManager.OnClientConnectedCallback -= OnClientConnected;
+        networkManager.OnClientDisconnectCallback -= OnClientDisconnected;
+        networkManager.OnTransportFailure -= OnTransportFailure;
+    }
+
+    private void OnClientConnected(ulong id)
+    {
+        Debug.Log($"[MainMenuNetUI] ✅ OnClientConnected: {id} | LocalClientId={networkManager.LocalClientId}");
+    }
+
+    private void OnClientDisconnected(ulong id)
+    {
+        Debug.LogWarning($"[MainMenuNetUI] ❌ OnClientDisconnected: {id} | IsListening={networkManager.IsListening}");
+    }
+
+    private void OnTransportFailure()
+    {
+        Debug.LogError("[MainMenuNetUI] 🚨 OnTransportFailure fired (Relay/Transport failed).");
+    }
+
+    // ===================== SERVICES/AUTH =====================
     private static async Task EnsureServicesReady()
     {
-        if (_initDone)
-            return;
+        if (servicesReady) return;
 
-        // If another call already started initialization, wait for it
-        if (_initTask != null)
+        if (initTask != null)
         {
-            await _initTask;
+            await initTask;
             return;
         }
 
-        _initTask = InitAndSignIn();
-        await _initTask;
-        _initDone = true;
+        initTask = Init();
+        await initTask;
+        servicesReady = true;
     }
 
-    private static async Task InitAndSignIn()
+    private static async Task Init()
     {
-        // Initialize Unity Services once
         if (UnityServices.State != ServicesInitializationState.Initialized)
         {
             Debug.Log("[MainMenuNetUI] Initializing Unity Services...");
             await UnityServices.InitializeAsync();
         }
 
-        // If already signed in, we are done
-        if (AuthenticationService.Instance.IsSignedIn)
+        if (!AuthenticationService.Instance.IsSignedIn)
         {
-            Debug.Log("[MainMenuNetUI] Already signed in.");
+            Debug.Log("[MainMenuNetUI] Signing in anonymously...");
+            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+            Debug.Log("[MainMenuNetUI] Signed in.");
+        }
+    }
+
+    // ===================== BUTTONS =====================
+    public void HostButton()
+    {
+        HostServer();
+    }
+
+    public void JoinButton()
+    {
+        JoinServerFromInput();
+    }
+
+    public void JoinServerFromInput()
+    {
+        if (joinCodeInput == null)
+        {
+            SetJoinStatus("Join input missing.");
             return;
         }
 
-        Debug.Log("[MainMenuNetUI] Signing in anonymously...");
-        await AuthenticationService.Instance.SignInAnonymouslyAsync();
-        Debug.Log("[MainMenuNetUI] Signed in.");
+        JoinServer(joinCodeInput.text.Trim());
     }
 
     // ===================== HOST =====================
     public async void HostServer()
     {
-        Debug.Log("[MainMenuNetUI] HostServer clicked");
+        if (busy) return;
+        busy = true;
+
+        float startTime = Time.realtimeSinceStartup;
+        ShowConnecting(true, "Connecting...");
 
         try
         {
@@ -79,14 +162,17 @@ public class MainMenuNetUI : MonoBehaviour
 
             if (networkManager == null || transport == null)
             {
-                Debug.LogError("[MainMenuNetUI] NetworkManager or Transport missing.");
+                Debug.LogError("[MainMenuNetUI] NetworkManager or UnityTransport missing.");
+                FailUI(startTime, "Missing NetworkManager/Transport");
                 return;
             }
 
+            // If something is already running, stop it first.
             if (networkManager.IsListening)
             {
-                Debug.LogWarning("[MainMenuNetUI] Network already running.");
-                return;
+                Debug.LogWarning("[MainMenuNetUI] Host requested while already listening. Shutting down first...");
+                networkManager.Shutdown();
+                await Task.Delay(200);
             }
 
             Debug.Log("[MainMenuNetUI] Creating Relay allocation...");
@@ -94,9 +180,9 @@ public class MainMenuNetUI : MonoBehaviour
             string joinCode = await RelayService.Instance.GetJoinCodeAsync(alloc.AllocationId);
 
             LastJoinCode = joinCode;
-            Debug.Log("[MainMenuNetUI] Join Code = " + joinCode);
+            Debug.Log($"[MainMenuNetUI] Join Code='{LastJoinCode}' length={LastJoinCode.Length}");
 
-            ApplyRelayToTransport(
+            ApplyRelay(
                 alloc.RelayServer,
                 alloc.AllocationIdBytes,
                 alloc.Key,
@@ -106,19 +192,48 @@ public class MainMenuNetUI : MonoBehaviour
             );
 
             bool started = networkManager.StartHost();
-            Debug.Log("[MainMenuNetUI] StartHost returned: " + started);
-            Debug.Log($"[MainMenuNetUI] IsHost={networkManager.IsHost} IsServer={networkManager.IsServer} IsClient={networkManager.IsClient}");
+            Debug.Log($"[MainMenuNetUI] StartHost returned={started} | IsListening={networkManager.IsListening} IsHost={networkManager.IsHost}");
+
+            if (!started)
+            {
+                FailUI(startTime, "Host failed to start");
+                return;
+            }
+
+            // Wait for local client to truly connect (id 0)
+            bool connected = await WaitForLocalConnect(connectTimeoutSeconds);
+            if (!connected)
+            {
+                Debug.LogError("[MainMenuNetUI] Host started but did NOT connect locally within timeout.");
+                FailUI(startTime, "Host connect timeout");
+                return;
+            }
+
+            UpdateLobbyCodeUI();
+
+            await WaitMinConnectingTime(startTime);
+            ShowConnecting(false);
+            ShowHostMenu(true);
         }
         catch (Exception e)
         {
             Debug.LogError("[MainMenuNetUI] HostServer FAILED:\n" + e);
+            FailUI(startTime, "Host failed");
+        }
+        finally
+        {
+            busy = false;
         }
     }
 
     // ===================== JOIN =====================
     public async void JoinServer(string joinCode)
     {
-        Debug.Log("[MainMenuNetUI] JoinServer clicked with code: " + joinCode);
+        if (busy) return;
+        busy = true;
+
+        float startTime = Time.realtimeSinceStartup;
+        ShowConnecting(true, "Connecting...");
 
         try
         {
@@ -126,26 +241,31 @@ public class MainMenuNetUI : MonoBehaviour
 
             if (networkManager == null || transport == null)
             {
-                Debug.LogError("[MainMenuNetUI] NetworkManager or Transport missing.");
-                return;
-            }
-
-            if (networkManager.IsListening)
-            {
-                Debug.LogWarning("[MainMenuNetUI] Network already running.");
+                Debug.LogError("[MainMenuNetUI] NetworkManager or UnityTransport missing.");
+                FailUI(startTime, "Missing NetworkManager/Transport");
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(joinCode))
             {
-                Debug.LogWarning("[MainMenuNetUI] Join code is empty.");
+                FailUI(startTime, "Enter a lobby code");
                 return;
+            }
+
+            Debug.Log($"[MainMenuNetUI] Join requested: code='{joinCode}' length={joinCode.Length}");
+
+            // If something is already running, stop it first.
+            if (networkManager.IsListening)
+            {
+                Debug.LogWarning("[MainMenuNetUI] Join requested while already listening. Shutting down first...");
+                networkManager.Shutdown();
+                await Task.Delay(200);
             }
 
             Debug.Log("[MainMenuNetUI] Joining Relay allocation...");
             JoinAllocation joinAlloc = await RelayService.Instance.JoinAllocationAsync(joinCode);
 
-            ApplyRelayToTransport(
+            ApplyRelay(
                 joinAlloc.RelayServer,
                 joinAlloc.AllocationIdBytes,
                 joinAlloc.Key,
@@ -155,22 +275,45 @@ public class MainMenuNetUI : MonoBehaviour
             );
 
             bool started = networkManager.StartClient();
-            Debug.Log("[MainMenuNetUI] StartClient returned: " + started);
-            Debug.Log($"[MainMenuNetUI] IsHost={networkManager.IsHost} IsServer={networkManager.IsServer} IsClient={networkManager.IsClient}");
+            Debug.Log($"[MainMenuNetUI] StartClient returned={started} | IsListening={networkManager.IsListening} IsClient={networkManager.IsClient}");
+
+            if (!started)
+            {
+                FailUI(startTime, "Client failed to start");
+                return;
+            }
+
+            // Wait until we truly connect to host (local client connected callback fires)
+            bool connected = await WaitForLocalConnect(connectTimeoutSeconds);
+            if (!connected)
+            {
+                Debug.LogError("[MainMenuNetUI] Client started but did NOT connect within timeout.");
+                FailUI(startTime, "Connect timeout");
+                return;
+            }
+
+            await WaitMinConnectingTime(startTime);
+            ShowConnecting(false);
+            SetJoinStatus("Connected");
         }
         catch (Exception e)
         {
             Debug.LogError("[MainMenuNetUI] JoinServer FAILED:\n" + e);
+            FailUI(startTime, "Failed to join");
+        }
+        finally
+        {
+            busy = false;
         }
     }
 
     // ===================== RELAY APPLY =====================
-    private void ApplyRelayToTransport(
-        RelayServer relayServer,
-        byte[] allocationIdBytes,
+    private void ApplyRelay(
+        RelayServer server,
+        byte[] allocId,
         byte[] key,
-        byte[] connectionData,
-        byte[] hostConnectionData,
+        byte[] connData,
+        byte[] hostConnData,
         bool secure)
     {
         if (transport == null)
@@ -179,19 +322,104 @@ public class MainMenuNetUI : MonoBehaviour
             return;
         }
 
-        string ip = relayServer.IpV4;
-        ushort port = (ushort)relayServer.Port;
-
-        Debug.Log($"[MainMenuNetUI] Applying Relay: ip={ip} port={port} secure={secure}");
+        Debug.Log($"[MainMenuNetUI] Applying Relay: {server.IpV4}:{server.Port} secure={secure}");
 
         transport.SetRelayServerData(
-            ip,
-            port,
-            allocationIdBytes,
+            server.IpV4,
+            (ushort)server.Port,
+            allocId,
             key,
-            connectionData,
-            hostConnectionData,
+            connData,
+            hostConnData,
             secure
         );
+    }
+
+    // ===================== WAIT FOR REAL CONNECTION =====================
+    private async Task<bool> WaitForLocalConnect(float timeoutSeconds)
+    {
+        float start = Time.realtimeSinceStartup;
+
+        // We consider "connected" when NetworkManager reports we are a client/host AND local client is in ConnectedClients
+        while (Time.realtimeSinceStartup - start < timeoutSeconds)
+        {
+            if (networkManager != null && networkManager.IsListening)
+            {
+                ulong localId = networkManager.LocalClientId;
+
+                // For host, local client is also in ConnectedClients
+                if (networkManager.ConnectedClients != null && networkManager.ConnectedClients.ContainsKey(localId))
+                    return true;
+            }
+
+            await Task.Delay(50);
+        }
+
+        return false;
+    }
+
+    // ===================== UI =====================
+    public void CopyLobbyCode()
+    {
+        if (string.IsNullOrEmpty(LastJoinCode))
+        {
+            Debug.LogWarning("[MainMenuNetUI] No lobby code to copy.");
+            return;
+        }
+
+        GUIUtility.systemCopyBuffer = LastJoinCode;
+        Debug.Log("[MainMenuNetUI] Lobby code copied: " + LastJoinCode);
+
+        if (lobbyCodeText != null)
+            lobbyCodeText.text = $"LOBBY CODE: {LastJoinCode} (COPIED)";
+    }
+
+    private void ShowConnecting(bool show, string msg = "")
+    {
+        if (connectingPanel != null)
+            connectingPanel.SetActive(show);
+
+        if (connectingText != null)
+            connectingText.text = msg;
+    }
+
+    private void ShowHostMenu(bool show)
+    {
+        if (hostMenuPanel != null)
+            hostMenuPanel.SetActive(show);
+    }
+
+    private void UpdateLobbyCodeUI()
+    {
+        if (lobbyCodeText != null)
+            lobbyCodeText.text = "LOBBY CODE: " + LastJoinCode;
+    }
+
+    private void SetJoinStatus(string msg)
+    {
+        if (joinStatusText != null)
+            joinStatusText.text = msg;
+
+        Debug.Log("[MainMenuNetUI] " + msg);
+    }
+
+    private async Task WaitMinConnectingTime(float start)
+    {
+        float remaining = connectingMinSeconds - (Time.realtimeSinceStartup - start);
+        if (remaining > 0f)
+            await Task.Delay(Mathf.CeilToInt(remaining * 1000f));
+    }
+
+    private void FailUI(float startTime, string msg)
+    {
+        SetJoinStatus(msg);
+        // Ensure we keep the panel up for the minimum time so it doesn't flash
+        _ = FailUIAsync(startTime);
+    }
+
+    private async Task FailUIAsync(float startTime)
+    {
+        await WaitMinConnectingTime(startTime);
+        ShowConnecting(false);
     }
 }
