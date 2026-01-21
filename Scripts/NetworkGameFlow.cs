@@ -169,13 +169,11 @@ public class NetworkGameFlow : MonoBehaviour
 
         no.SpawnAsPlayerObject(clientId, true);
 
-        // ✅ ADDED (safe optional): if later you choose to set appearance server-side, this is where you'd do it.
-        // Right now, your NetworkCharacterAppearance will handle it via owner RPC.
+       
         var appearance = go.GetComponent<NetworkCharacterAppearance>();
         if (appearance == null)
         {
-            // Not an error, just helpful log.
-            // Debug.LogWarning("[NetworkGameFlow] Spawned player has no NetworkCharacterAppearance component.");
+
         }
     }
 }
