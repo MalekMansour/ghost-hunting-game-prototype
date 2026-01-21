@@ -2,20 +2,22 @@ using System.Collections;
 using UnityEngine;
 using Unity.Netcode;
 
-public class PlayerSpawner : NetworkBehaviour
+public class PlayerSpawner : MonoBehaviour
 {
     [Header("References (auto if empty)")]
-    public GameObject cylinder;     // your movement/interaction root
-    public Transform modelRoot;     // where NetworkCharacterAppearance spawns the model (ModelRoot)
+    public GameObject cylinder;
+    public Transform modelRoot;
 
     [Header("Rebind")]
     [SerializeField] private float waitForModelTimeout = 5f;
 
+    private NetworkObject netObj;
     private Coroutine bindRoutine;
 
     private void Awake()
     {
-        // Auto-find cylinder
+        netObj = GetComponent<NetworkObject>();
+
         if (cylinder == null)
         {
             Transform t = transform.Find("cylinder");
@@ -23,7 +25,6 @@ public class PlayerSpawner : NetworkBehaviour
             if (t != null) cylinder = t.gameObject;
         }
 
-        // Auto-find modelRoot
         if (modelRoot == null)
         {
             Transform mr = transform.Find("ModelRoot");
@@ -31,17 +32,13 @@ public class PlayerSpawner : NetworkBehaviour
         }
     }
 
-    public override void OnNetworkSpawn()
+    private void OnEnable()
     {
-        // We DO NOT spawn the character here anymore.
-        // NetworkCharacterAppearance is responsible for spawning the model.
-
-        // We only bind references once the model exists.
         if (bindRoutine != null) StopCoroutine(bindRoutine);
         bindRoutine = StartCoroutine(BindWhenModelExists());
     }
 
-    public override void OnNetworkDespawn()
+    private void OnDisable()
     {
         if (bindRoutine != null) StopCoroutine(bindRoutine);
         bindRoutine = null;
@@ -51,7 +48,6 @@ public class PlayerSpawner : NetworkBehaviour
     {
         float start = Time.time;
 
-        // Wait until ModelRoot has a spawned child model
         while (true)
         {
             if (modelRoot != null && modelRoot.childCount > 0)
@@ -59,7 +55,7 @@ public class PlayerSpawner : NetworkBehaviour
 
             if (Time.time - start > waitForModelTimeout)
             {
-                Debug.LogWarning("[PlayerSpawner] Timed out waiting for model under ModelRoot. Will still try to bind once.");
+                Debug.LogWarning("[PlayerSpawner] Timed out waiting for model under ModelRoot.");
                 break;
             }
 
@@ -69,7 +65,6 @@ public class PlayerSpawner : NetworkBehaviour
         RebindFromCurrentModel();
     }
 
-    // Call this if you ever swap the model at runtime and need to re-hook references
     public void RebindFromCurrentModel()
     {
         if (cylinder == null)
@@ -92,7 +87,6 @@ public class PlayerSpawner : NetworkBehaviour
 
         GameObject model = modelRoot.GetChild(0).gameObject;
 
-        // Animator hookup
         Animator anim = model.GetComponentInChildren<Animator>(true);
         if (anim == null)
         {
@@ -105,17 +99,11 @@ public class PlayerSpawner : NetworkBehaviour
                 animScript.SetAnimator(anim);
         }
 
-        // Find HoldPoint inside the model
         Transform holdPoint = FindDeepChild(model.transform, "HoldPoint");
-        if (holdPoint == null)
-        {
-            Debug.LogWarning("[PlayerSpawner] HoldPoint NOT FOUND on model (name must be exactly 'HoldPoint').");
-        }
 
-        // IMPORTANT:
-        // Only the OWNER should bind local interaction/inventory control.
-        // Otherwise one player’s local scripts will point at another player’s model.
-        if (IsOwner)
+        bool isOwner = (netObj != null && netObj.IsOwner);
+
+        if (isOwner)
         {
             Interaction interaction = cylinder.GetComponent<Interaction>();
             if (interaction != null && holdPoint != null)
@@ -126,11 +114,13 @@ public class PlayerSpawner : NetworkBehaviour
                 inventory.handPoint = holdPoint;
         }
 
-        // Optional: helpful naming in hierarchy
-        gameObject.name = $"Player({OwnerClientId})";
-        model.name = $"Model(Owner {OwnerClientId})";
+        if (netObj != null)
+        {
+            gameObject.name = $"Player({netObj.OwnerClientId})";
+            model.name = $"Model(Owner {netObj.OwnerClientId})";
+        }
 
-        Debug.Log($"[PlayerSpawner] Rebind complete for Player({OwnerClientId}). IsOwner={IsOwner}");
+        Debug.Log($"[PlayerSpawner] Rebind complete. isOwner={isOwner}");
     }
 
     private Transform FindDeepChild(Transform parent, string childName)
