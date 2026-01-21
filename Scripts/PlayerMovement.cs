@@ -1,7 +1,8 @@
 using UnityEngine;
 using System.Collections;
+using Unity.Netcode;
 
-public class PlayerMovement : MonoBehaviour
+public class PlayerMovement : NetworkBehaviour
 {
     [Header("Movement")]
     public float moveSpeed = 10f;
@@ -25,7 +26,7 @@ public class PlayerMovement : MonoBehaviour
     public AudioClip outOfBreathSound;
     [Range(0f, 1f)] public float breathVolume = 0.3f;
 
-    // ✅ NEW: Anti-slide lock
+    // ✅ Anti-slide lock
     [Header("Anti-Slide")]
     [Tooltip("If no input and Rigidbody is drifting, freeze X/Z so player can't slide.")]
     public bool preventSlidingWhenNoInput = true;
@@ -35,6 +36,14 @@ public class PlayerMovement : MonoBehaviour
 
     [Tooltip("How long there must be no input before we lock (prevents locking during tiny stops).")]
     public float noInputLockDelay = 0.05f;
+
+    // ✅ OPTIONAL: keep cylinder alive but synced to root for scripts that reference it
+    [Header("Legacy Cylinder Support (optional)")]
+    [Tooltip("If your project still uses a child 'Cylinder' object for references, assign it here. We'll keep it aligned with this root.")]
+    public Transform cylinder;
+
+    [Tooltip("If true, cylinder will follow this object's position/rotation each FixedUpdate.")]
+    public bool cylinderFollowsRoot = false;
 
     private float currentSpeed;
     private float currentStamina;
@@ -50,31 +59,73 @@ public class PlayerMovement : MonoBehaviour
 
     private Rigidbody rb;
 
-    // ✅ lock Y to the starting height forever
+    // lock Y to starting height forever
     private float lockedY;
 
-    // ✅ NEW anti-slide state
+    // anti-slide state
     private float noInputTimer = 0f;
     private bool slideLockedXZ = false;
 
-    void Start()
+    // ✅ Added: so we don't spam logs / init multiple times
+    private bool didInit = false;
+
+    public override void OnNetworkSpawn()
     {
+        // Initialize stamina for all instances (owner and non-owner) so UI calls won't break
+        if (!didInit)
+        {
+            InitOnce();
+        }
+
+        // Owner should have camera reference; non-owners usually won't (their camera is disabled)
+        // We only error on owner if camera missing.
+        if (IsOwner && playerCamera == null)
+            Debug.LogError("[PlayerMovement] Player camera NOT assigned on PlayerMovement (Owner).");
+
+        // Non-owners should NOT run input or movement.
+        // They'll be moved by NetworkTransform syncing the root.
+    }
+
+    private void Start()
+    {
+        // Keep compatibility if this script is used outside NGO context
+        if (!didInit)
+        {
+            InitOnce();
+        }
+
+        if (playerCamera == null && (!NetworkManager.Singleton || (NetworkManager.Singleton && NetworkManager.Singleton.IsListening && IsOwner)))
+            Debug.LogError("Player camera NOT assigned on PlayerMovement!");
+    }
+
+    private void InitOnce()
+    {
+        didInit = true;
+
         currentStamina = maxStamina;
 
         rb = GetComponent<Rigidbody>();
+        if (rb == null)
+        {
+            Debug.LogError("[PlayerMovement] Rigidbody missing on the object that has PlayerMovement. " +
+                           "For networking, this should be the Player ROOT (the NetworkObject).");
+            return;
+        }
+
         rb.freezeRotation = true;
 
         lockedY = rb.position.y;
 
         // Keep your constraint behavior
         rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotation;
-
-        if (playerCamera == null)
-            Debug.LogError("Player camera NOT assigned on PlayerMovement!");
     }
 
     void Update()
     {
+        // ✅ CRITICAL: only the owning client reads input / drives movement
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !IsOwner)
+            return;
+
         if (isMovementLocked)
             return;
 
@@ -127,6 +178,7 @@ public class PlayerMovement : MonoBehaviour
 
         currentStamina = Mathf.Clamp(currentStamina, 0, maxStamina);
 
+        // Camera smoothing is owner-only (remote players don't need it)
         if (playerCamera != null)
         {
             float targetHeight = isCrouching ? crouchCamHeight : standingCamHeight;
@@ -135,7 +187,7 @@ public class PlayerMovement : MonoBehaviour
             playerCamera.localPosition = camPos;
         }
 
-        // ✅ NEW: If player gives input again, instantly unlock XZ
+        // If player gives input again, instantly unlock XZ
         if (preventSlidingWhenNoInput && slideLockedXZ && moveInput.sqrMagnitude > 0.01f)
         {
             UnlockXZ();
@@ -144,7 +196,14 @@ public class PlayerMovement : MonoBehaviour
 
     void FixedUpdate()
     {
+        // ✅ CRITICAL: only the owning client moves the Rigidbody
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !IsOwner)
+            return;
+
         if (isMovementLocked)
+            return;
+
+        if (rb == null)
             return;
 
         // --- Your original movement ---
@@ -158,7 +217,7 @@ public class PlayerMovement : MonoBehaviour
         // Keep Y locked
         targetPos.y = lockedY;
 
-        // ✅ NEW: anti-slide logic
+        // anti-slide logic
         if (preventSlidingWhenNoInput)
         {
             bool hasInput = moveInput.sqrMagnitude > 0.01f;
@@ -183,7 +242,7 @@ public class PlayerMovement : MonoBehaviour
             else
             {
                 noInputTimer = 0f;
-                // if we had locked, Update() also unlocks immediately, but this is extra-safe
+                // extra-safe unlock
                 if (slideLockedXZ)
                     UnlockXZ();
             }
@@ -203,6 +262,13 @@ public class PlayerMovement : MonoBehaviour
         Vector3 vel = rb.linearVelocity;
         vel.y = 0f;
         rb.linearVelocity = vel;
+
+        // ✅ OPTIONAL: keep legacy cylinder aligned to root (if you still need it)
+        if (cylinderFollowsRoot && cylinder != null)
+        {
+            cylinder.position = rb.position;
+            cylinder.rotation = transform.rotation;
+        }
     }
 
     void LockXZ()
