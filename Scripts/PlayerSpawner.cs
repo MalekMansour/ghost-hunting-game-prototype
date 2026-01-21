@@ -14,27 +14,26 @@ public class PlayerSpawner : MonoBehaviour
     private NetworkObject netObj;
     private Coroutine bindRoutine;
 
-    // ✅ ADDED: cache the network root transform for reliable Find()
+    // Cache the network root transform for reliable Find()
     private Transform networkRoot;
 
     private void Awake()
     {
-        // ✅ FIX: if this component is on a child, GetComponent<NetworkObject>() returns null.
+        // If this component is on a child, GetComponentInParent is required.
         netObj = GetComponentInParent<NetworkObject>();
-
         networkRoot = (netObj != null) ? netObj.transform : transform;
 
-        if (cylinder == null)
+        // Find cylinder (optional legacy anchor)
+        if (cylinder == null && networkRoot != null)
         {
-            // ✅ FIX: search from the network root (player root), not from this child
             Transform t = networkRoot.Find("cylinder");
             if (t == null) t = networkRoot.Find("Cylinder");
             if (t != null) cylinder = t.gameObject;
         }
 
-        if (modelRoot == null)
+        // ✅ IMPORTANT: ModelRoot MUST be under the Player ROOT
+        if (modelRoot == null && networkRoot != null)
         {
-            // ✅ FIX: search from network root
             Transform mr = networkRoot.Find("ModelRoot");
             if (mr != null) modelRoot = mr;
         }
@@ -58,7 +57,7 @@ public class PlayerSpawner : MonoBehaviour
 
         while (true)
         {
-            // ✅ if ModelRoot ref got lost / not assigned yet, try to reacquire it
+            // If ModelRoot ref got lost / not assigned yet, try to reacquire it
             if (modelRoot == null)
             {
                 if (networkRoot == null && netObj != null) networkRoot = netObj.transform;
@@ -85,15 +84,15 @@ public class PlayerSpawner : MonoBehaviour
 
     public void RebindFromCurrentModel()
     {
-        if (cylinder == null)
+        if (networkRoot == null)
         {
-            Debug.LogError("[PlayerSpawner] Cylinder missing.");
+            Debug.LogError("[PlayerSpawner] Network root missing.");
             return;
         }
 
         if (modelRoot == null)
         {
-            Debug.LogError("[PlayerSpawner] ModelRoot missing. Create a child named 'ModelRoot' and assign it.");
+            Debug.LogError("[PlayerSpawner] ModelRoot missing. Create a child named 'ModelRoot' under the PLAYER ROOT and assign it.");
             return;
         }
 
@@ -105,6 +104,7 @@ public class PlayerSpawner : MonoBehaviour
 
         GameObject model = modelRoot.GetChild(0).gameObject;
 
+        // Animator binding (for MovementAnimation)
         Animator anim = model.GetComponentInChildren<Animator>(true);
         if (anim == null)
         {
@@ -112,7 +112,11 @@ public class PlayerSpawner : MonoBehaviour
         }
         else
         {
-            MovementAnimation animScript = cylinder.GetComponent<MovementAnimation>();
+            // ✅ Prefer root for scripts (since you're migrating everything off cylinder)
+            MovementAnimation animScript = networkRoot.GetComponent<MovementAnimation>();
+            if (animScript == null && cylinder != null)
+                animScript = cylinder.GetComponent<MovementAnimation>();
+
             if (animScript != null)
                 animScript.SetAnimator(anim);
         }
@@ -123,11 +127,18 @@ public class PlayerSpawner : MonoBehaviour
 
         if (isOwner)
         {
-            Interaction interaction = cylinder.GetComponent<Interaction>();
+            // ✅ Prefer root for Interaction/Inventory (since those should live on the player root)
+            Interaction interaction = networkRoot.GetComponent<Interaction>();
+            if (interaction == null && cylinder != null)
+                interaction = cylinder.GetComponent<Interaction>();
+
             if (interaction != null && holdPoint != null)
                 interaction.SetHoldPoint(holdPoint);
 
-            PlayerInventory inventory = cylinder.GetComponent<PlayerInventory>();
+            PlayerInventory inventory = networkRoot.GetComponent<PlayerInventory>();
+            if (inventory == null && cylinder != null)
+                inventory = cylinder.GetComponent<PlayerInventory>();
+
             if (inventory != null && holdPoint != null)
                 inventory.handPoint = holdPoint;
         }
