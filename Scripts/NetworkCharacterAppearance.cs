@@ -23,7 +23,7 @@ public class NetworkCharacterAppearance : NetworkBehaviour
         NetworkVariableWritePermission.Server
     );
 
-    // ✅ ADDED: prevents spamming RPC or overwriting repeatedly
+    // Prevent spamming
     private bool sentChoiceToServer = false;
 
     public override void OnNetworkSpawn()
@@ -40,34 +40,10 @@ public class NetworkCharacterAppearance : NetworkBehaviour
         // Apply current value immediately (important for late joiners)
         ApplyCharacter(characterIndex.Value);
 
-        // ✅ FIX: Each owning client should tell the server their chosen character once.
-        // IMPORTANT: PlayerPrefs can be shared in-editor; in real builds each client has their own prefs.
+        // ✅ FIX: send the owner’s LocalSelection to server once
         TrySendOwnerChoiceToServerOnce();
 
-        // IMPORTANT:
-        // We do NOT send PlayerPrefs to the server here anymore.
-        // The server should set this using:
-        // - Connection payload (recommended), or
-        // - A server-side script when the player spawns.
-        //
-        // If you still want a fallback for SOLO testing where no payload is used,
-        // you can enable the fallback below.
-        if (IsServer && OwnerClientId == NetworkManager.Singleton.LocalClientId)
-        {
-            // Optional fallback for local host testing ONLY.
-            // If you're using payload, you can delete this entire block.
-            if (!HasServerChosenValueYet())
-            {
-                int chosen = PlayerPrefs.GetInt("SelectedCharacter", 0);
-                chosen = Mathf.Clamp(chosen, 0, Mathf.Max(0, characters.Length - 1));
-
-                Debug.Log($"[NetworkCharacterAppearance] (Fallback) Server applying local host PlayerPrefs index={chosen}");
-                SetCharacterIndexServer(chosen);
-            }
-        }
-
         // Naming: make it consistent on every client once spawned
-        // (This only changes the local hierarchy name, not network identity.)
         UpdateNames(characterIndex.Value);
     }
 
@@ -76,12 +52,23 @@ public class NetworkCharacterAppearance : NetworkBehaviour
         characterIndex.OnValueChanged -= OnCharacterIndexChanged;
     }
 
-    // ✅ ADDED: if ownership changes, ensure correct player sends their choice
+    // If ownership ever changes, ensure the new owner pushes their selection once
     public override void OnGainedOwnership()
     {
         TrySendOwnerChoiceToServerOnce();
     }
 
+    private void OnCharacterIndexChanged(int oldValue, int newValue)
+    {
+        ApplyCharacter(newValue);
+        UpdateNames(newValue);
+    }
+
+    /// <summary>
+    /// ✅ Key fix:
+    /// Use LocalSelection.SelectedCharacterIndex (per instance in MP Play Mode),
+    /// not PlayerPrefs (shared and causes “everyone becomes the same”).
+    /// </summary>
     private void TrySendOwnerChoiceToServerOnce()
     {
         if (!IsSpawned) return;
@@ -94,7 +81,7 @@ public class NetworkCharacterAppearance : NetworkBehaviour
             return;
         }
 
-        int chosen = PlayerPrefs.GetInt("SelectedCharacter", 0);
+        int chosen = GetChosenIndexFromLocalSelection();
         chosen = Mathf.Clamp(chosen, 0, Mathf.Max(0, characters.Length - 1));
 
         // Host is both server+client: set directly (no RPC needed)
@@ -112,10 +99,22 @@ public class NetworkCharacterAppearance : NetworkBehaviour
         sentChoiceToServer = true;
     }
 
-    private void OnCharacterIndexChanged(int oldValue, int newValue)
+    private int GetChosenIndexFromLocalSelection()
     {
-        ApplyCharacter(newValue);
-        UpdateNames(newValue);
+        // ✅ Your CharacterSelector sets this on Start and on ApplySelection/Next/Previous
+        // This is the per-instance value you want in Multiplayer Play Mode.
+        int chosen = 0;
+
+        // If LocalSelection exists, use it.
+        // (Assumes you already have a LocalSelection class because your selector uses it.)
+        chosen = LocalSelection.SelectedCharacterIndex;
+
+        // Safety fallback if something didn't initialize yet:
+        // (Won't break anything; it just prevents invalid values.)
+        if (chosen < 0)
+            chosen = 0;
+
+        return chosen;
     }
 
     /// <summary>
@@ -142,10 +141,6 @@ public class NetworkCharacterAppearance : NetworkBehaviour
         Debug.Log($"[NetworkCharacterAppearance] Server set characterIndex={index} for OwnerClientId={OwnerClientId}");
     }
 
-    /// <summary>
-    /// If you want to keep the ServerRpc path as a backup, you can use this.
-    /// BUT do not feed it PlayerPrefs (because prefs can be shared in MP Play Mode).
-    /// </summary>
     [ServerRpc(RequireOwnership = true)]
     public void SetCharacterServerRpc(int index)
     {
@@ -200,16 +195,14 @@ public class NetworkCharacterAppearance : NetworkBehaviour
     private void UpdateNames(int index)
     {
         // Name player nicely in hierarchy (local-only)
-        // If you want Player(1), Player(2) etc, use OwnerClientId.
         gameObject.name = $"Player({OwnerClientId})";
 
-        // If you also want the character name on the player object:
+        // Also put character name
         if (characters != null && index >= 0 && index < characters.Length)
             gameObject.name = $"Player({OwnerClientId})-{characters[index].characterName}";
     }
 
     // Helper so the fallback doesn't overwrite a value the server already decided.
-    // (We treat "0" as possibly valid, so we check if visuals already exist.)
     private bool HasServerChosenValueYet()
     {
         if (modelRoot == null) return false;
