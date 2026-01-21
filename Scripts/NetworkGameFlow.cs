@@ -32,7 +32,7 @@ public class NetworkGameFlow : MonoBehaviour
         NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
         NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
 
-        Debug.Log("[NetworkGameFlow][OnEnable] Registered client connect/disconnect callbacks.");
+        Debug.Log("[NetworkGameFlow][OnEnable] Registered client callbacks.");
     }
 
     private void OnDisable()
@@ -49,44 +49,36 @@ public class NetworkGameFlow : MonoBehaviour
     {
         if (sceneEventsHooked) return;
 
-        if (NetworkManager.Singleton == null)
+        if (NetworkManager.Singleton == null || NetworkManager.Singleton.SceneManager == null)
         {
-            Debug.LogWarning("[NetworkGameFlow] Cannot hook scene events: NetworkManager.Singleton is NULL.");
-            return;
-        }
-
-        if (NetworkManager.Singleton.SceneManager == null)
-        {
-            Debug.LogWarning("[NetworkGameFlow] Cannot hook scene events: NetworkManager.Singleton.SceneManager is NULL (yet).");
+            Debug.LogWarning("[NetworkGameFlow] SceneManager not ready yet.");
             return;
         }
 
         NetworkManager.Singleton.SceneManager.OnSceneEvent += OnSceneEvent;
         sceneEventsHooked = true;
-        Debug.Log("[NetworkGameFlow] ✅ Scene events hooked successfully.");
+        Debug.Log("[NetworkGameFlow] ✅ Scene events hooked.");
     }
 
     private void UnhookSceneEvents()
     {
         if (!sceneEventsHooked) return;
-        if (NetworkManager.Singleton == null) return;
-        if (NetworkManager.Singleton.SceneManager == null) return;
+        if (NetworkManager.Singleton?.SceneManager == null) return;
 
         NetworkManager.Singleton.SceneManager.OnSceneEvent -= OnSceneEvent;
         sceneEventsHooked = false;
-        Debug.Log("[NetworkGameFlow] Scene events unhooked.");
     }
 
     private void OnClientConnected(ulong clientId)
     {
         connectedClients.Add(clientId);
-        Debug.Log($"[NetworkGameFlow][OnClientConnected] Client {clientId} connected. IsServer={NetworkManager.Singleton.IsServer} ActiveScene='{SceneManager.GetActiveScene().name}'");
+        Debug.Log($"[NetworkGameFlow] Client {clientId} connected.");
 
-        // Try to hook scene events as soon as networking is alive
         HookSceneEventsIfPossible();
 
-        // Late-join spawn if already in game
-        if (matchStarted && NetworkManager.Singleton.IsServer && SceneManager.GetActiveScene().name == gameSceneName)
+        if (matchStarted &&
+            NetworkManager.Singleton.IsServer &&
+            SceneManager.GetActiveScene().name == gameSceneName)
         {
             EnsurePlayerSpawned(clientId);
         }
@@ -95,49 +87,36 @@ public class NetworkGameFlow : MonoBehaviour
     private void OnClientDisconnected(ulong clientId)
     {
         connectedClients.Remove(clientId);
-        Debug.Log($"[NetworkGameFlow][OnClientDisconnected] Client {clientId} disconnected.");
+        Debug.Log($"[NetworkGameFlow] Client {clientId} disconnected.");
     }
 
+    // Called by Start button (HOST ONLY)
     public void HostStartMatch()
     {
-        Debug.Log("🔥 [NetworkGameFlow][HostStartMatch] CALLED");
+        Debug.Log("🔥 [NetworkGameFlow] HostStartMatch CALLED");
 
-        if (NetworkManager.Singleton == null)
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsHost)
         {
-            Debug.LogError("[NetworkGameFlow][HostStartMatch] No NetworkManager.Singleton");
+            Debug.LogWarning("[NetworkGameFlow] Only host can start match.");
             return;
         }
 
-        if (!NetworkManager.Singleton.IsHost)
-        {
-            Debug.LogWarning("[NetworkGameFlow][HostStartMatch] Only host can start match.");
-            return;
-        }
-
-        // IMPORTANT: hook scene events right before loading
         HookSceneEventsIfPossible();
-
-        if (NetworkManager.Singleton.SceneManager == null)
-        {
-            Debug.LogError("[NetworkGameFlow][HostStartMatch] SceneManager is STILL NULL. This usually means you have TWO NetworkManagers or scene management is not enabled on the active NetworkManager.");
-            return;
-        }
-
         matchStarted = true;
 
-        Debug.Log($"[NetworkGameFlow][HostStartMatch] Loading '{gameSceneName}' via NGO SceneManager...");
+        Debug.Log("[NetworkGameFlow] Loading game scene via NGO...");
         NetworkManager.Singleton.SceneManager.LoadScene(gameSceneName, LoadSceneMode.Single);
     }
 
     private void OnSceneEvent(SceneEvent sceneEvent)
     {
-        Debug.Log($"[NetworkGameFlow][OnSceneEvent] Type={sceneEvent.SceneEventType} Scene='{sceneEvent.SceneName}' ClientId={sceneEvent.ClientId} IsServer={NetworkManager.Singleton.IsServer}");
+        Debug.Log($"[NetworkGameFlow][SceneEvent] {sceneEvent.SceneEventType} {sceneEvent.SceneName} client={sceneEvent.ClientId}");
 
         if (!NetworkManager.Singleton.IsServer) return;
 
-        if (sceneEvent.SceneEventType == SceneEventType.LoadComplete && sceneEvent.SceneName == gameSceneName)
+        if (sceneEvent.SceneEventType == SceneEventType.LoadComplete &&
+            sceneEvent.SceneName == gameSceneName)
         {
-            Debug.Log($"[NetworkGameFlow] ✅ LoadComplete for client {sceneEvent.ClientId} in '{gameSceneName}'. Spawning player...");
             EnsurePlayerSpawned(sceneEvent.ClientId);
         }
     }
@@ -146,13 +125,14 @@ public class NetworkGameFlow : MonoBehaviour
     {
         if (playerPrefab == null)
         {
-            Debug.LogError("[NetworkGameFlow] playerPrefab not assigned!");
+            Debug.LogError("[NetworkGameFlow] Player prefab NOT assigned.");
             return;
         }
 
-        if (NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var cc) && cc.PlayerObject != null)
+        if (NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var cc) &&
+            cc.PlayerObject != null)
         {
-            Debug.Log($"[NetworkGameFlow] Client {clientId} already has a PlayerObject.");
+            Debug.Log($"[NetworkGameFlow] Client {clientId} already has PlayerObject.");
             return;
         }
 
@@ -172,7 +152,7 @@ public class NetworkGameFlow : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning("[NetworkGameFlow] SpawnPoint not found. Spawning at (0,0,0).");
+            Debug.LogWarning("[NetworkGameFlow] SpawnPoint not found.");
         }
 
         Debug.Log($"[NetworkGameFlow] Spawning player for client {clientId} at {pos}");
@@ -182,12 +162,20 @@ public class NetworkGameFlow : MonoBehaviour
         NetworkObject no = go.GetComponent<NetworkObject>();
         if (no == null)
         {
-            Debug.LogError("[NetworkGameFlow] Player prefab missing NetworkObject on root!");
+            Debug.LogError("[NetworkGameFlow] Player prefab missing NetworkObject.");
             Destroy(go);
             return;
         }
 
         no.SpawnAsPlayerObject(clientId, true);
+
+        // ✅ ADDED (safe optional): if later you choose to set appearance server-side, this is where you'd do it.
+        // Right now, your NetworkCharacterAppearance will handle it via owner RPC.
+        var appearance = go.GetComponent<NetworkCharacterAppearance>();
+        if (appearance == null)
+        {
+            // Not an error, just helpful log.
+            // Debug.LogWarning("[NetworkGameFlow] Spawned player has no NetworkCharacterAppearance component.");
+        }
     }
 }
-
