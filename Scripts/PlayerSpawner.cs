@@ -14,20 +14,28 @@ public class PlayerSpawner : MonoBehaviour
     private NetworkObject netObj;
     private Coroutine bindRoutine;
 
+    // ✅ ADDED: cache the network root transform for reliable Find()
+    private Transform networkRoot;
+
     private void Awake()
     {
-        netObj = GetComponent<NetworkObject>();
+        // ✅ FIX: if this component is on a child, GetComponent<NetworkObject>() returns null.
+        netObj = GetComponentInParent<NetworkObject>();
+
+        networkRoot = (netObj != null) ? netObj.transform : transform;
 
         if (cylinder == null)
         {
-            Transform t = transform.Find("cylinder");
-            if (t == null) t = transform.Find("Cylinder");
+            // ✅ FIX: search from the network root (player root), not from this child
+            Transform t = networkRoot.Find("cylinder");
+            if (t == null) t = networkRoot.Find("Cylinder");
             if (t != null) cylinder = t.gameObject;
         }
 
         if (modelRoot == null)
         {
-            Transform mr = transform.Find("ModelRoot");
+            // ✅ FIX: search from network root
+            Transform mr = networkRoot.Find("ModelRoot");
             if (mr != null) modelRoot = mr;
         }
     }
@@ -50,6 +58,16 @@ public class PlayerSpawner : MonoBehaviour
 
         while (true)
         {
+            // ✅ if ModelRoot ref got lost / not assigned yet, try to reacquire it
+            if (modelRoot == null)
+            {
+                if (networkRoot == null && netObj != null) networkRoot = netObj.transform;
+                if (networkRoot == null) networkRoot = transform;
+
+                Transform mr = networkRoot.Find("ModelRoot");
+                if (mr != null) modelRoot = mr;
+            }
+
             if (modelRoot != null && modelRoot.childCount > 0)
                 break;
 
@@ -116,7 +134,7 @@ public class PlayerSpawner : MonoBehaviour
 
         if (netObj != null)
         {
-            gameObject.name = $"Player({netObj.OwnerClientId})";
+            gameObject.name = $"PlayerSpawner(Owner {netObj.OwnerClientId})";
             model.name = $"Model(Owner {netObj.OwnerClientId})";
         }
 
