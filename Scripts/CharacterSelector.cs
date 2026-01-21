@@ -1,6 +1,6 @@
 using UnityEngine;
-using UnityEngine.UI;
 using TMPro;
+using UnityEngine.UI;
 
 public class CharacterSelector : MonoBehaviour
 {
@@ -8,31 +8,31 @@ public class CharacterSelector : MonoBehaviour
     public class Character
     {
         public string characterName;
-        public GameObject prefab;   
-        public Sprite mugshot;     
+        public Sprite mugshot;
     }
 
     [Header("Characters")]
     public Character[] characters;
 
     [Header("UI Elements")]
-    public Image mugshotImage;          
-    public TextMeshProUGUI nameText;   
+    public Image mugshotImage;
+    public TextMeshProUGUI nameText;
 
     private int currentIndex = 0;
 
-    void Start()
+    private void Start()
     {
-        if (characters.Length == 0)
+        if (characters == null || characters.Length == 0)
         {
-            Debug.LogError("CharacterSelector: No characters assigned in the inspector!");
+            Debug.LogError("[CharacterSelector] No characters assigned!");
             return;
         }
 
         currentIndex = PlayerPrefs.GetInt("SelectedCharacter", 0);
+        currentIndex = Mathf.Clamp(currentIndex, 0, characters.Length - 1);
 
-        if (currentIndex < 0 || currentIndex >= characters.Length)
-            currentIndex = 0;
+        // IMPORTANT: set local selection at start
+        LocalSelection.SelectedCharacterIndex = currentIndex;
 
         UpdateUI();
     }
@@ -41,9 +41,8 @@ public class CharacterSelector : MonoBehaviour
     {
         if (characters.Length == 0) return;
 
-        currentIndex++;
-        if (currentIndex >= characters.Length)
-            currentIndex = 0;
+        currentIndex = (currentIndex + 1) % characters.Length;
+        LocalSelection.SelectedCharacterIndex = currentIndex;
 
         UpdateUI();
     }
@@ -53,8 +52,9 @@ public class CharacterSelector : MonoBehaviour
         if (characters.Length == 0) return;
 
         currentIndex--;
-        if (currentIndex < 0)
-            currentIndex = characters.Length - 1;
+        if (currentIndex < 0) currentIndex = characters.Length - 1;
+
+        LocalSelection.SelectedCharacterIndex = currentIndex;
 
         UpdateUI();
     }
@@ -65,13 +65,14 @@ public class CharacterSelector : MonoBehaviour
 
         PlayerPrefs.SetInt("SelectedCharacter", currentIndex);
         PlayerPrefs.Save();
-        Debug.Log("Selected character index: " + currentIndex + " (" + characters[currentIndex].characterName + ")");
+
+        LocalSelection.SelectedCharacterIndex = currentIndex;
+
+        Debug.Log($"[CharacterSelector] Selected index={currentIndex} name='{characters[currentIndex].characterName}'");
     }
 
     private void UpdateUI()
     {
-        if (characters.Length == 0) return;
-
         if (mugshotImage != null)
             mugshotImage.sprite = characters[currentIndex].mugshot;
 
@@ -79,4 +80,3 @@ public class CharacterSelector : MonoBehaviour
             nameText.text = characters[currentIndex].characterName;
     }
 }
-
