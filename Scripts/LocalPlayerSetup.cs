@@ -12,7 +12,21 @@ public class LocalPlayerSetup : NetworkBehaviour
     [Header("Objects to ALWAYS stay on for everyone (model root, cylinder, etc)")]
     [SerializeField] private GameObject[] alwaysOnObjects;
 
+    // ✅ ADDED: helps if ownership changes (host migration setups, etc)
+    private bool appliedOnce = false;
+
     public override void OnNetworkSpawn()
+    {
+        Apply();
+    }
+
+    // ✅ ADDED: ensure correct toggles if ownership is gained/lost
+    public override void OnGainedOwnership()
+    {
+        Apply();
+    }
+
+    public override void OnLostOwnership()
     {
         Apply();
     }
@@ -39,6 +53,8 @@ public class LocalPlayerSetup : NetworkBehaviour
             foreach (var b in ownerOnlyBehaviours)
                 if (b != null) b.enabled = isOwner;
         }
+
+        appliedOnce = true;
 
         Debug.Log($"[LocalPlayerSetup] Applied. IsOwner={isOwner} OwnerClientId={OwnerClientId} name='{name}'");
     }
