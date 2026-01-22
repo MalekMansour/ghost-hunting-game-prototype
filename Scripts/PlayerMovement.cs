@@ -15,18 +15,11 @@ public class PlayerMovement : NetworkBehaviour
     public float staminaDrainRate = 1f;
     public float sprintCooldown = 6f;
 
-    [Header("Camera")]
-    public Transform playerCamera;
-    public float standingCamHeight = 1.6f;
-    public float crouchCamHeight = 0.6f;
-    public float camSmoothSpeed = 8f;
-
     [Header("Audio")]
     public AudioSource audioSource;
     public AudioClip outOfBreathSound;
     [Range(0f, 1f)] public float breathVolume = 0.3f;
 
-    // ✅ Anti-slide lock
     [Header("Anti-Slide")]
     [Tooltip("If no input and Rigidbody is drifting, freeze X/Z so player can't slide.")]
     public bool preventSlidingWhenNoInput = true;
@@ -37,7 +30,6 @@ public class PlayerMovement : NetworkBehaviour
     [Tooltip("How long there must be no input before we lock (prevents locking during tiny stops).")]
     public float noInputLockDelay = 0.05f;
 
-    // ✅ OPTIONAL: keep cylinder alive but synced to root for scripts that reference it
     [Header("Legacy Cylinder Support (optional)")]
     [Tooltip("If your project still uses a child 'Cylinder' object for references, assign it here. We'll keep it aligned with this root.")]
     public Transform cylinder;
@@ -54,8 +46,7 @@ public class PlayerMovement : NetworkBehaviour
 
     private bool hasPlayedBreathSound = false;
 
-    [HideInInspector]
-    public Vector2 moveInput;
+    [HideInInspector] public Vector2 moveInput;
 
     private Rigidbody rb;
 
@@ -66,21 +57,14 @@ public class PlayerMovement : NetworkBehaviour
     private float noInputTimer = 0f;
     private bool slideLockedXZ = false;
 
-    // ✅ Added: so we don't spam logs / init multiple times
     private bool didInit = false;
 
     public override void OnNetworkSpawn()
     {
-        // Initialize stamina for all instances (owner and non-owner) so UI calls won't break
         if (!didInit)
         {
             InitOnce();
         }
-
-        // Owner should have camera reference; non-owners usually won't (their camera is disabled)
-        // We only error on owner if camera missing.
-        if (IsOwner && playerCamera == null)
-            Debug.LogError("[PlayerMovement] Player camera NOT assigned on PlayerMovement (Owner).");
 
         // Non-owners should NOT run input or movement.
         // They'll be moved by NetworkTransform syncing the root.
@@ -88,14 +72,10 @@ public class PlayerMovement : NetworkBehaviour
 
     private void Start()
     {
-        // Keep compatibility if this script is used outside NGO context
         if (!didInit)
         {
             InitOnce();
         }
-
-        if (playerCamera == null && (!NetworkManager.Singleton || (NetworkManager.Singleton && NetworkManager.Singleton.IsListening && IsOwner)))
-            Debug.LogError("Player camera NOT assigned on PlayerMovement!");
     }
 
     private void InitOnce()
@@ -122,7 +102,7 @@ public class PlayerMovement : NetworkBehaviour
 
     void Update()
     {
-        // ✅ CRITICAL: only the owning client reads input / drives movement
+        // Only the owning client reads input
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !IsOwner)
             return;
 
@@ -178,15 +158,6 @@ public class PlayerMovement : NetworkBehaviour
 
         currentStamina = Mathf.Clamp(currentStamina, 0, maxStamina);
 
-        // Camera smoothing is owner-only (remote players don't need it)
-        if (playerCamera != null)
-        {
-            float targetHeight = isCrouching ? crouchCamHeight : standingCamHeight;
-            Vector3 camPos = playerCamera.localPosition;
-            camPos.y = Mathf.Lerp(camPos.y, targetHeight, Time.deltaTime * camSmoothSpeed);
-            playerCamera.localPosition = camPos;
-        }
-
         // If player gives input again, instantly unlock XZ
         if (preventSlidingWhenNoInput && slideLockedXZ && moveInput.sqrMagnitude > 0.01f)
         {
@@ -196,7 +167,7 @@ public class PlayerMovement : NetworkBehaviour
 
     void FixedUpdate()
     {
-        // ✅ CRITICAL: only the owning client moves the Rigidbody
+        // Only the owning client moves the Rigidbody
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !IsOwner)
             return;
 
@@ -206,7 +177,6 @@ public class PlayerMovement : NetworkBehaviour
         if (rb == null)
             return;
 
-        // --- Your original movement ---
         Vector3 moveDir =
             transform.right * moveInput.x +
             transform.forward * moveInput.y;
@@ -214,10 +184,8 @@ public class PlayerMovement : NetworkBehaviour
         Vector3 targetPos =
             rb.position + moveDir.normalized * currentSpeed * Time.fixedDeltaTime;
 
-        // Keep Y locked
         targetPos.y = lockedY;
 
-        // anti-slide logic
         if (preventSlidingWhenNoInput)
         {
             bool hasInput = moveInput.sqrMagnitude > 0.01f;
@@ -226,28 +194,24 @@ public class PlayerMovement : NetworkBehaviour
             {
                 noInputTimer += Time.fixedDeltaTime;
 
-                // Only lock after a tiny delay
                 if (noInputTimer >= noInputLockDelay)
                 {
-                    // drift check on XZ
                     Vector3 v = rb.linearVelocity;
                     float xzSpeed = new Vector2(v.x, v.z).magnitude;
 
                     if (!slideLockedXZ && xzSpeed > slideVelocityThreshold)
                     {
-                        LockXZ(); // freeze X/Z so physics can't slide you
+                        LockXZ();
                     }
                 }
             }
             else
             {
                 noInputTimer = 0f;
-                // extra-safe unlock
                 if (slideLockedXZ)
                     UnlockXZ();
             }
 
-            // If locked, don't MovePosition (since X/Z are frozen anyway)
             if (!slideLockedXZ)
             {
                 rb.MovePosition(targetPos);
@@ -258,12 +222,10 @@ public class PlayerMovement : NetworkBehaviour
             rb.MovePosition(targetPos);
         }
 
-        // Your vertical velocity kill
         Vector3 vel = rb.linearVelocity;
         vel.y = 0f;
         rb.linearVelocity = vel;
 
-        // ✅ OPTIONAL: keep legacy cylinder aligned to root (if you still need it)
         if (cylinderFollowsRoot && cylinder != null)
         {
             cylinder.position = rb.position;
@@ -275,14 +237,12 @@ public class PlayerMovement : NetworkBehaviour
     {
         slideLockedXZ = true;
 
-        // Freeze X/Z in addition to your existing constraints
         rb.constraints =
             RigidbodyConstraints.FreezePositionX |
             RigidbodyConstraints.FreezePositionZ |
             RigidbodyConstraints.FreezePositionY |
             RigidbodyConstraints.FreezeRotation;
 
-        // Kill sideways velocity immediately
         Vector3 v = rb.linearVelocity;
         v.x = 0f;
         v.z = 0f;
@@ -294,7 +254,6 @@ public class PlayerMovement : NetworkBehaviour
         slideLockedXZ = false;
         noInputTimer = 0f;
 
-        // Go back to your original constraints
         rb.constraints =
             RigidbodyConstraints.FreezePositionY |
             RigidbodyConstraints.FreezeRotation;
