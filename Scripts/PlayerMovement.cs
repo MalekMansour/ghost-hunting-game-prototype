@@ -30,12 +30,19 @@ public class PlayerMovement : NetworkBehaviour
     [Tooltip("How long there must be no input before we lock (prevents locking during tiny stops).")]
     public float noInputLockDelay = 0.05f;
 
-    [Header("Legacy Cylinder Support (optional)")]
-    [Tooltip("If your project still uses a child 'Cylinder' object for references, assign it here. We'll keep it aligned with this root.")]
-    public Transform cylinder;
+    // ✅ RESTORED: Pivot height control (crouch/stand)
+    [Header("Camera Pivot (Owner Only)")]
+    [Tooltip("Assign your CameraPivot transform here (recommended: empty that parents the Camera).")]
+    public Transform cameraPivot;
 
-    [Tooltip("If true, cylinder will follow this object's position/rotation each FixedUpdate.")]
-    public bool cylinderFollowsRoot = false;
+    [Tooltip("Local Y height for standing camera pivot.")]
+    public float standingPivotHeight = 1.6f;
+
+    [Tooltip("Local Y height for crouching camera pivot.")]
+    public float crouchPivotHeight = 0.6f;
+
+    [Tooltip("How fast pivot height smooths.")]
+    public float pivotSmoothSpeed = 8f;
 
     private float currentSpeed;
     private float currentStamina;
@@ -62,20 +69,17 @@ public class PlayerMovement : NetworkBehaviour
     public override void OnNetworkSpawn()
     {
         if (!didInit)
-        {
             InitOnce();
-        }
 
-        // Non-owners should NOT run input or movement.
-        // They'll be moved by NetworkTransform syncing the root.
+        // ✅ Owner-only pivot sanity check
+        if (IsOwner && cameraPivot == null)
+            Debug.LogWarning("[PlayerMovement] cameraPivot is NOT assigned (Owner). Crouch camera height won't work.");
     }
 
     private void Start()
     {
         if (!didInit)
-        {
             InitOnce();
-        }
     }
 
     private void InitOnce()
@@ -158,6 +162,21 @@ public class PlayerMovement : NetworkBehaviour
 
         currentStamina = Mathf.Clamp(currentStamina, 0, maxStamina);
 
+        // ✅ RESTORED: pivot height smoothing (Owner only)
+        if (cameraPivot != null)
+        {
+            float targetY = isCrouching ? crouchPivotHeight : standingPivotHeight;
+
+            Vector3 lp = cameraPivot.localPosition;
+
+            // preserve X/Z exactly so yaw NEVER causes orbiting
+            lp.y = Mathf.Lerp(lp.y, targetY, Time.deltaTime * pivotSmoothSpeed);
+            lp.x = 0f;
+            lp.z = 0f;
+
+            cameraPivot.localPosition = lp;
+        }
+
         // If player gives input again, instantly unlock XZ
         if (preventSlidingWhenNoInput && slideLockedXZ && moveInput.sqrMagnitude > 0.01f)
         {
@@ -225,12 +244,6 @@ public class PlayerMovement : NetworkBehaviour
         Vector3 vel = rb.linearVelocity;
         vel.y = 0f;
         rb.linearVelocity = vel;
-
-        if (cylinderFollowsRoot && cylinder != null)
-        {
-            cylinder.position = rb.position;
-            cylinder.rotation = transform.rotation;
-        }
     }
 
     void LockXZ()
