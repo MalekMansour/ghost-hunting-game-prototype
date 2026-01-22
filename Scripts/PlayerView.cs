@@ -7,12 +7,10 @@ public class PlayerView : MonoBehaviour
 {
     public float sensitivity = 150f;
     public float smoothTime = 0.05f;
-
-    [Tooltip("Rotate this on yaw (left/right). This should be the PLAYER ROOT, not ModelRoot.")]
     public Transform playerBody;
 
     [Header("Pitch Pivot (recommended)")]
-    [Tooltip("Rotate this on pitch (up/down). Usually an empty child like 'CameraPivot' that parents the camera.")]
+    [Tooltip("Rotate this up/down (pitch). Usually an empty like 'CameraPivot' that parents the camera.")]
     public Transform pitchPivot;
 
     [Header("Look Limits")]
@@ -46,30 +44,33 @@ public class PlayerView : MonoBehaviour
     [Tooltip("If true, we will also enable spectatorVolume GameObject/Behaviour before fading in.")]
     public bool forceEnableSpectatorVolume = true;
 
-    // --- existing state ---
     float xRotation = 0f;
     float currentMouseX, currentMouseY, mouseXVelocity, mouseYVelocity;
     private bool spectatorMode = false;
 
     private Coroutine fadeRoutine;
 
-    // ✅ NEW: keep a stable yaw accumulator so body doesn't drift / get overridden
+    // ✅ stable yaw accumulator
     private float yawRotation = 0f;
+
+    // ✅ if body has rigidbody, rotate via MoveRotation (prevents "orbit-y" weird feel)
+    private Rigidbody bodyRb;
 
     void Start()
     {
-        UnityEngine.Cursor.lockState = CursorLockMode.Locked;
-        UnityEngine.Cursor.visible = false;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
 
-        // If pitchPivot not assigned, default to this camera transform (backwards compatible)
         if (pitchPivot == null)
-            pitchPivot = transform;
+            pitchPivot = transform; // backward compatible
 
-        // Initialize yaw from current body rotation so we don't snap on start
         if (playerBody != null)
+        {
             yawRotation = playerBody.eulerAngles.y;
+            bodyRb = playerBody.GetComponent<Rigidbody>();
+        }
 
-        // Initialize pitch from current pivot rotation
+        // Initialize pitch from current pivot
         float initPitch = pitchPivot.localEulerAngles.x;
         if (initPitch > 180f) initPitch -= 360f;
         xRotation = Mathf.Clamp(initPitch, maxLookDown, maxLookUp);
@@ -87,13 +88,6 @@ public class PlayerView : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Called by Death when spectator starts.
-    /// - Stops rotating the body
-    /// - Enables spectator PP by switching the camera's Volume Layer Mask
-    /// - Optionally toggles PP components
-    /// - Fades from normalVolume -> spectatorVolume (URP Volume weight)
-    /// </summary>
     public void SetSpectatorMode(bool enabled)
     {
         spectatorMode = enabled;
@@ -102,15 +96,13 @@ public class PlayerView : MonoBehaviour
         {
             // camera no longer controls body rotation
             playerBody = null;
+            bodyRb = null;
 
-            // toggle components (optional)
             if (normalPP != null) normalPP.enabled = false;
             if (spectatorPP != null) spectatorPP.enabled = true;
 
-            // include spectator PP layer in the camera's volume mask
             ForcePostProcessingLayerOnCamera();
 
-            // fade URP volumes
             if (fadeRoutine != null) StopCoroutine(fadeRoutine);
             fadeRoutine = StartCoroutine(FadeToSpectatorVolume());
         }
@@ -124,6 +116,9 @@ public class PlayerView : MonoBehaviour
 
             if (normalVolume != null) normalVolume.weight = 1f;
             if (spectatorVolume != null) spectatorVolume.weight = 0f;
+
+            // restore rb reference if body still assigned later
+            if (playerBody != null) bodyRb = playerBody.GetComponent<Rigidbody>();
         }
     }
 
@@ -135,7 +130,7 @@ public class PlayerView : MonoBehaviour
         currentMouseX = Mathf.SmoothDamp(currentMouseX, targetMouseX, ref mouseXVelocity, smoothTime);
         currentMouseY = Mathf.SmoothDamp(currentMouseY, targetMouseY, ref mouseYVelocity, smoothTime);
 
-        // Pitch: camera pivot only
+        // Pitch (camera only)
         xRotation -= currentMouseY * Time.deltaTime;
         xRotation = Mathf.Clamp(xRotation, maxLookDown, maxLookUp);
 
@@ -144,19 +139,29 @@ public class PlayerView : MonoBehaviour
         else
             transform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
 
-        // Yaw: body only (left/right)
+        // Yaw accumulator (apply in FixedUpdate if using Rigidbody)
         if (!spectatorMode && playerBody != null)
         {
             yawRotation += currentMouseX * Time.deltaTime;
 
-            // ✅ Use explicit rotation instead of Rotate() to prevent fighting/drift
-            playerBody.rotation = Quaternion.Euler(0f, yawRotation, 0f);
+            // If no rigidbody, fall back to transform rotation (still shouldn't change position)
+            if (bodyRb == null)
+                playerBody.rotation = Quaternion.Euler(0f, yawRotation, 0f);
+        }
+    }
+
+    void FixedUpdate()
+    {
+        // Apply yaw through Rigidbody for physics correctness
+        if (!spectatorMode && playerBody != null && bodyRb != null)
+        {
+            Quaternion target = Quaternion.Euler(0f, yawRotation, 0f);
+            bodyRb.MoveRotation(target);
         }
     }
 
     private IEnumerator FadeToSpectatorVolume()
     {
-        // If they didn't assign volumes, we can't fade weights (still will mask-switch).
         if (normalVolume == null || spectatorVolume == null)
             yield break;
 
@@ -168,7 +173,6 @@ public class PlayerView : MonoBehaviour
         float startNormal = normalVolume.weight;
         float startSpec = spectatorVolume.weight;
 
-        // We want: normal -> 0, spectator -> 1
         float t = 0f;
         while (t < 1f)
         {
@@ -202,7 +206,6 @@ public class PlayerView : MonoBehaviour
             return;
         }
 
-        // --- URP: UniversalAdditionalCameraData.volumeLayerMask ---
         var urpType = Type.GetType(
             "UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime"
         );
