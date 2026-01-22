@@ -7,7 +7,13 @@ public class PlayerView : MonoBehaviour
 {
     public float sensitivity = 150f;
     public float smoothTime = 0.05f;
+
+    [Tooltip("Rotate this on yaw (left/right). This should be the PLAYER ROOT, not ModelRoot.")]
     public Transform playerBody;
+
+    [Header("Pitch Pivot (recommended)")]
+    [Tooltip("Rotate this on pitch (up/down). Usually an empty child like 'CameraPivot' that parents the camera.")]
+    public Transform pitchPivot;
 
     [Header("Look Limits")]
     public float maxLookUp = 90f;
@@ -40,16 +46,33 @@ public class PlayerView : MonoBehaviour
     [Tooltip("If true, we will also enable spectatorVolume GameObject/Behaviour before fading in.")]
     public bool forceEnableSpectatorVolume = true;
 
+    // --- existing state ---
     float xRotation = 0f;
     float currentMouseX, currentMouseY, mouseXVelocity, mouseYVelocity;
     private bool spectatorMode = false;
 
     private Coroutine fadeRoutine;
 
+    // ✅ NEW: keep a stable yaw accumulator so body doesn't drift / get overridden
+    private float yawRotation = 0f;
+
     void Start()
     {
         UnityEngine.Cursor.lockState = CursorLockMode.Locked;
         UnityEngine.Cursor.visible = false;
+
+        // If pitchPivot not assigned, default to this camera transform (backwards compatible)
+        if (pitchPivot == null)
+            pitchPivot = transform;
+
+        // Initialize yaw from current body rotation so we don't snap on start
+        if (playerBody != null)
+            yawRotation = playerBody.eulerAngles.y;
+
+        // Initialize pitch from current pivot rotation
+        float initPitch = pitchPivot.localEulerAngles.x;
+        if (initPitch > 180f) initPitch -= 360f;
+        xRotation = Mathf.Clamp(initPitch, maxLookDown, maxLookUp);
 
         // defaults
         if (normalPP != null) normalPP.enabled = true;
@@ -112,13 +135,23 @@ public class PlayerView : MonoBehaviour
         currentMouseX = Mathf.SmoothDamp(currentMouseX, targetMouseX, ref mouseXVelocity, smoothTime);
         currentMouseY = Mathf.SmoothDamp(currentMouseY, targetMouseY, ref mouseYVelocity, smoothTime);
 
+        // Pitch: camera pivot only
         xRotation -= currentMouseY * Time.deltaTime;
         xRotation = Mathf.Clamp(xRotation, maxLookDown, maxLookUp);
 
-        transform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        if (pitchPivot != null)
+            pitchPivot.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        else
+            transform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
 
+        // Yaw: body only (left/right)
         if (!spectatorMode && playerBody != null)
-            playerBody.Rotate(Vector3.up * currentMouseX * Time.deltaTime);
+        {
+            yawRotation += currentMouseX * Time.deltaTime;
+
+            // ✅ Use explicit rotation instead of Rotate() to prevent fighting/drift
+            playerBody.rotation = Quaternion.Euler(0f, yawRotation, 0f);
+        }
     }
 
     private IEnumerator FadeToSpectatorVolume()
