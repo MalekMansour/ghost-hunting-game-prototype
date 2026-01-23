@@ -125,7 +125,6 @@ public class MainMenuNetUI : MonoBehaviour
         }
     }
 
-    // ===================== BUTTONS =====================
     public void HostButton()
     {
         HostServer();
@@ -147,7 +146,6 @@ public class MainMenuNetUI : MonoBehaviour
         JoinServer(joinCodeInput.text.Trim());
     }
 
-    // ===================== HOST =====================
     public async void HostServer()
     {
         if (busy) return;
