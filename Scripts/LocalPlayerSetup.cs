@@ -12,52 +12,41 @@ public class LocalPlayerSetup : NetworkBehaviour
     [Header("Objects to ALWAYS stay on for everyone (model root, cylinder, etc)")]
     [SerializeField] private GameObject[] alwaysOnObjects;
 
-    // ✅ Helps if ownership changes
-    private bool appliedOnce = false;
-
     // =============================
-    // ✅ ADDED: Movement Sync Wiring
+    // Optional: Cylinder parenting
     // =============================
-
-    [Header("Movement Sync (recommended)")]
-    [Tooltip("Your child cylinder (or whatever object old scripts reference). Kept alive for other scripts.")]
+    [Header("Optional: Cylinder (legacy support)")]
+    [Tooltip("Assign your child cylinder here (or leave empty to auto-find by name).")]
     [SerializeField] private Transform cylinderTransform;
 
-    [Tooltip("If enabled, cylinder will be forced to follow the networked root each frame (for scripts that read cylinder position).")]
-    [SerializeField] private bool cylinderFollowsRoot = true;
+    [Tooltip("If true, we ensure cylinder is parented to this Player root once (preserves world transform).")]
+    [SerializeField] private bool ensureCylinderIsChildOfRoot = true;
 
-    [Tooltip("Scripts on the ROOT that should be enabled only for the owner (movement, interaction, etc).")]
-    [SerializeField] private Behaviour[] ownerOnlyRootBehaviours;
-
-    [Tooltip("Scripts on the CYLINDER that should be disabled (so you don't accidentally move the child instead of the network root).")]
-    [SerializeField] private Behaviour[] cylinderMovementBehavioursToDisable;
-
-    [Tooltip("Optional: If you have a NetworkTransform on the root, drag it here for a helpful warning if missing.")]
+    [Tooltip("Optional: If you have a NetworkTransform on the root, drag it here for a warning if missing.")]
     [SerializeField] private Component expectedNetworkTransform;
 
     private Transform rootTransform;
 
     public override void OnNetworkSpawn()
     {
-        CacheRootAndCylinder();
+        CacheRefs();
         Apply();
     }
 
     public override void OnGainedOwnership()
     {
-        CacheRootAndCylinder();
+        CacheRefs();
         Apply();
     }
 
     public override void OnLostOwnership()
     {
-        CacheRootAndCylinder();
+        CacheRefs();
         Apply();
     }
 
-    private void CacheRootAndCylinder()
+    private void CacheRefs()
     {
-        // NetworkObject is on the Player root (this object).
         rootTransform = transform;
 
         // Auto-find cylinder if not assigned
@@ -71,8 +60,6 @@ public class LocalPlayerSetup : NetworkBehaviour
         // Auto-grab NetworkTransform if user didn't drag it in
         if (expectedNetworkTransform == null)
         {
-            // "NetworkTransform" type exists in NGO; using Component keeps this file flexible.
-            // We'll just check that *some* component named NetworkTransform is present.
             var comps = rootTransform.GetComponents<Component>();
             foreach (var c in comps)
             {
@@ -83,27 +70,11 @@ public class LocalPlayerSetup : NetworkBehaviour
                 }
             }
         }
-    }
 
-    private void Update()
-    {
-        // Keep cylinder alive and following root so legacy scripts using cylinder position keep working.
-        // This is purely local transform parenting behavior; it does NOT affect network sync (root does).
-        if (cylinderFollowsRoot && cylinderTransform != null && rootTransform != null)
+        // Ensure cylinder is a child of root ONCE (no Update loop)
+        if (ensureCylinderIsChildOfRoot && cylinderTransform != null && cylinderTransform.parent != rootTransform)
         {
-            // If cylinder is already a child of root, localPosition might be set by your prefab.
-            // Here we only ensure it stays aligned in world-space if something moved it.
-            // If you want an offset, keep it in the prefab; this preserves offset.
-            // We’ll preserve local transform by using parent relationship as the source of truth.
-            if (cylinderTransform.parent != rootTransform)
-            {
-                // Preserve world transform
-                Vector3 wPos = cylinderTransform.position;
-                Quaternion wRot = cylinderTransform.rotation;
-                cylinderTransform.SetParent(rootTransform, true);
-                cylinderTransform.position = wPos;
-                cylinderTransform.rotation = wRot;
-            }
+            cylinderTransform.SetParent(rootTransform, true); // true = keep world transform
         }
     }
 
@@ -111,42 +82,29 @@ public class LocalPlayerSetup : NetworkBehaviour
     {
         bool isOwner = IsOwner;
 
-        // Always-on safety (prevents the “everything disabled” situation)
+        // Always-on safety
         if (alwaysOnObjects != null)
         {
             foreach (var go in alwaysOnObjects)
                 if (go != null) go.SetActive(true);
         }
 
+        // Owner-only objects
         if (ownerOnlyObjects != null)
         {
             foreach (var go in ownerOnlyObjects)
                 if (go != null) go.SetActive(isOwner);
         }
 
+        // Owner-only scripts
         if (ownerOnlyBehaviours != null)
         {
             foreach (var b in ownerOnlyBehaviours)
                 if (b != null) b.enabled = isOwner;
         }
 
-        // ✅ NEW: enable owner-only scripts on ROOT (recommended place for movement)
-        if (ownerOnlyRootBehaviours != null)
-        {
-            foreach (var b in ownerOnlyRootBehaviours)
-                if (b != null) b.enabled = isOwner;
-        }
-
-        // ✅ NEW: disable cylinder movement scripts so you don't move the wrong transform
-        if (cylinderMovementBehavioursToDisable != null)
-        {
-            foreach (var b in cylinderMovementBehavioursToDisable)
-                if (b != null) b.enabled = false;
-        }
-
-        appliedOnce = true;
-
-        if (IsServer || IsClient)
+        // Helpful warning if movement doesn't sync
+        if (IsClient || IsServer)
         {
             if (expectedNetworkTransform == null)
             {
