@@ -93,7 +93,6 @@ public class MainMenuNetUI : MonoBehaviour
         Debug.LogError("[MainMenuNetUI] 🚨 OnTransportFailure fired (Relay/Transport failed).");
     }
 
-    // ===================== SERVICES/AUTH =====================
     private static async Task EnsureServicesReady()
     {
         if (servicesReady) return;
@@ -165,7 +164,6 @@ public class MainMenuNetUI : MonoBehaviour
                 return;
             }
 
-            // If something is already running, stop it first.
             if (networkManager.IsListening)
             {
                 Debug.LogWarning("[MainMenuNetUI] Host requested while already listening. Shutting down first...");
