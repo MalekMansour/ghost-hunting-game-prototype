@@ -7,6 +7,9 @@ public class PlayerView : MonoBehaviour
 {
     public float sensitivity = 150f;
     public float smoothTime = 0.05f;
+
+    [Header("Player Root (Yaw)")]
+    [Tooltip("This rotates left/right (yaw). Set this to your Player ROOT transform.")]
     public Transform playerBody;
 
     [Header("Pitch Pivot (recommended)")]
@@ -18,42 +21,30 @@ public class PlayerView : MonoBehaviour
     public float maxLookDown = -40f;
 
     [Header("Spectator Post Processing Layer")]
-    [Tooltip("This is the LAYER your spectator Volume object is on.")]
     public string spectatorPostProcessingLayerName = "SpectatorPostProcessing";
-
-    [Tooltip("Keep normal PP layer(s) too? If true, we ADD spectator layer instead of replacing mask.")]
     public bool keepExistingVolumeMask = true;
 
     [Header("Optional: Component toggles (extra safety)")]
-    [Tooltip("Your normal PP component/Volume (enabled while alive). Optional.")]
     public Behaviour normalPP;
-
-    [Tooltip("Your spectator PP component/Volume (disabled by default, enabled on death). Optional.")]
     public Behaviour spectatorPP;
 
     [Header("URP Volume Fade (nice transition)")]
-    [Tooltip("Drag your normal URP Volume here (the one currently active while alive).")]
     public Volume normalVolume;
-
-    [Tooltip("Drag your spectator URP Volume here (the one you want after death).")]
     public Volume spectatorVolume;
-
-    [Tooltip("How long it takes to fade from normal -> spectator.")]
     public float volumeFadeDuration = 0.6f;
-
-    [Tooltip("If true, we will also enable spectatorVolume GameObject/Behaviour before fading in.")]
     public bool forceEnableSpectatorVolume = true;
 
-    float xRotation = 0f;
+    // smoothed inputs
+    float xRotation = 0f; // pitch
     float currentMouseX, currentMouseY, mouseXVelocity, mouseYVelocity;
-    private bool spectatorMode = false;
 
+    private bool spectatorMode = false;
     private Coroutine fadeRoutine;
 
-    // ✅ stable yaw accumulator
+    // yaw accumulator
     private float yawRotation = 0f;
 
-    // ✅ if body has rigidbody, rotate via MoveRotation (prevents "orbit-y" weird feel)
+    // if body has Rigidbody, rotate via MoveRotation (best for "spin on place")
     private Rigidbody bodyRb;
 
     void Start()
@@ -61,25 +52,69 @@ public class PlayerView : MonoBehaviour
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
 
-        if (pitchPivot == null)
-            pitchPivot = transform; // backward compatible
+        // ----------------------------
+        // HARD AUTO-FIND (NO WEIRD FALLBACKS)
+        // ----------------------------
 
+        // If playerBody not set, try to find it by walking UP to the Player root.
+        // Expected hierarchy:
+        // Player (root)
+        //   CameraPivot
+        //     Main Camera (this script is here)
+        if (playerBody == null)
+        {
+            Transform t = transform;
+            while (t != null)
+            {
+                if (t.name == "Player") { playerBody = t; break; }
+                t = t.parent;
+            }
+
+            // If your Player root isn't literally named "Player", fallback to topmost parent.
+            if (playerBody == null)
+            {
+                Transform top = transform;
+                while (top.parent != null) top = top.parent;
+                playerBody = top;
+            }
+        }
+
+        // If pitchPivot not set, find EXACT child "CameraPivot" under playerBody.
+        // No "parent of camera" fallback, because that’s how it accidentally binds wrong.
+        if (pitchPivot == null && playerBody != null)
+        {
+            Transform found = playerBody.Find("CameraPivot");
+            if (found != null) pitchPivot = found;
+        }
+
+        // If still missing (misnamed pivot), last resort: use current parent,
+        // but ONLY if it is not the camera itself.
+        if (pitchPivot == null && transform.parent != null && transform.parent != transform)
+            pitchPivot = transform.parent;
+
+        // ----------------------------
+        // INIT ROTATION STATE
+        // ----------------------------
         if (playerBody != null)
         {
             yawRotation = playerBody.eulerAngles.y;
             bodyRb = playerBody.GetComponent<Rigidbody>();
         }
 
-        // Initialize pitch from current pivot
-        float initPitch = pitchPivot.localEulerAngles.x;
-        if (initPitch > 180f) initPitch -= 360f;
+        float initPitch = 0f;
+        if (pitchPivot != null)
+        {
+            initPitch = pitchPivot.localEulerAngles.x;
+            if (initPitch > 180f) initPitch -= 360f;
+        }
         xRotation = Mathf.Clamp(initPitch, maxLookDown, maxLookUp);
 
-        // defaults
+        // ----------------------------
+        // POST PROCESS INIT
+        // ----------------------------
         if (normalPP != null) normalPP.enabled = true;
         if (spectatorPP != null) spectatorPP.enabled = false;
 
-        // defaults for volumes
         if (normalVolume != null) normalVolume.weight = 1f;
         if (spectatorVolume != null)
         {
@@ -94,7 +129,7 @@ public class PlayerView : MonoBehaviour
 
         if (spectatorMode)
         {
-            // camera no longer controls body rotation
+            // stop controlling body rotation
             playerBody = null;
             bodyRb = null;
 
@@ -124,35 +159,44 @@ public class PlayerView : MonoBehaviour
 
     void Update()
     {
+        // Smooth mouse input
         float targetMouseX = Input.GetAxisRaw("Mouse X") * sensitivity;
         float targetMouseY = Input.GetAxisRaw("Mouse Y") * sensitivity;
 
         currentMouseX = Mathf.SmoothDamp(currentMouseX, targetMouseX, ref mouseXVelocity, smoothTime);
         currentMouseY = Mathf.SmoothDamp(currentMouseY, targetMouseY, ref mouseYVelocity, smoothTime);
 
-        // Pitch (camera only)
+        // -------------------------
+        // PITCH (CameraPivot ONLY)
+        // -------------------------
         xRotation -= currentMouseY * Time.deltaTime;
         xRotation = Mathf.Clamp(xRotation, maxLookDown, maxLookUp);
 
         if (pitchPivot != null)
+        {
+            // ONLY pivot rotates in pitch; camera never rotates in this script
             pitchPivot.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
-        else
-            transform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        }
 
-        // Yaw accumulator (apply in FixedUpdate if using Rigidbody)
+        // -------------------------
+        // YAW (Player ROOT ONLY)
+        // -------------------------
         if (!spectatorMode && playerBody != null)
         {
             yawRotation += currentMouseX * Time.deltaTime;
 
-            // If no rigidbody, fall back to transform rotation (still shouldn't change position)
+            // If no Rigidbody, rotate transform directly (spin in place)
             if (bodyRb == null)
+            {
                 playerBody.rotation = Quaternion.Euler(0f, yawRotation, 0f);
+            }
+            // Rigidbody rotation applied in FixedUpdate
         }
     }
 
     void FixedUpdate()
     {
-        // Apply yaw through Rigidbody for physics correctness
+        // Apply yaw through Rigidbody so the Player ROOT spins in place without physics weirdness
         if (!spectatorMode && playerBody != null && bodyRb != null)
         {
             Quaternion target = Quaternion.Euler(0f, yawRotation, 0f);
@@ -225,8 +269,6 @@ public class PlayerView : MonoBehaviour
                         : (LayerMask)addMask;
 
                     prop.SetValue(urp, next);
-
-                    Debug.Log($"[PlayerView] URP volumeLayerMask now: {next.value} (added {spectatorPostProcessingLayerName})");
                     return;
                 }
             }
