@@ -2,163 +2,261 @@ using System.Collections;
 using UnityEngine;
 using Unity.Netcode;
 
-public class PlayerSpawner : MonoBehaviour
+public class PlayerSpawner : NetworkBehaviour
 {
-    [Header("References (auto if empty)")]
-    public GameObject cylinder;
+    [Header("Character Model Prefabs (VISUAL ONLY - no NetworkObject)")]
+    public GameObject[] characterPrefabs;
+
+    [Tooltip("Fallback index if you don't have selection yet.")]
+    public int defaultCharacterIndex = 0;
+
+    [Header("ModelRoot (auto-find if null)")]
     public Transform modelRoot;
 
-    [Header("Rebind")]
-    [SerializeField] private float waitForModelTimeout = 5f;
+    [Header("Spawn Wait")]
+    [SerializeField] private float waitForModelRootTimeout = 5f;
 
-    private NetworkObject netObj;
-    private Coroutine bindRoutine;
+    [Header("Local Reset Under ModelRoot")]
+    public Vector3 modelLocalPosition = Vector3.zero;
+    public Vector3 modelLocalEuler = Vector3.zero;
+    public Vector3 modelLocalScale = Vector3.one;
 
-    // Cache the network root transform for reliable Find()
-    private Transform networkRoot;
+    [Header("Optional bindings on PLAYER ROOT")]
+    public MovementAnimation movementAnimation;
+    public Interaction interaction;
+    public PlayerInventory inventory;
+
+    [Header("Debug")]
+    public bool debugLogs = true;
+
+    private Transform playerRoot;
+    private Coroutine routine;
+    private bool hasAttemptedSpawn = false;
 
     private void Awake()
     {
-        // If this component is on a child, GetComponentInParent is required.
-        netObj = GetComponentInParent<NetworkObject>();
-        networkRoot = (netObj != null) ? netObj.transform : transform;
+        playerRoot = transform; // script should be on the Player root (NetworkObject)
 
-        // Find cylinder (optional legacy anchor)
-        if (cylinder == null && networkRoot != null)
-        {
-            Transform t = networkRoot.Find("cylinder");
-            if (t == null) t = networkRoot.Find("Cylinder");
-            if (t != null) cylinder = t.gameObject;
-        }
-
-        // ✅ IMPORTANT: ModelRoot MUST be under the Player ROOT
-        if (modelRoot == null && networkRoot != null)
-        {
-            Transform mr = networkRoot.Find("ModelRoot");
-            if (mr != null) modelRoot = mr;
-        }
+        // Optional scripts on root
+        if (movementAnimation == null) movementAnimation = playerRoot.GetComponent<MovementAnimation>();
+        if (interaction == null) interaction = playerRoot.GetComponent<Interaction>();
+        if (inventory == null) inventory = playerRoot.GetComponent<PlayerInventory>();
     }
 
     private void OnEnable()
     {
-        if (bindRoutine != null) StopCoroutine(bindRoutine);
-        bindRoutine = StartCoroutine(BindWhenModelExists());
+        // Covers cases where this gets enabled AFTER spawn / after owner-only toggles.
+        TryKickSpawner("OnEnable");
     }
 
-    private void OnDisable()
+    private void Start()
     {
-        if (bindRoutine != null) StopCoroutine(bindRoutine);
-        bindRoutine = null;
+        // Offline safety + extra reliability if OnNetworkSpawn timing is weird.
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
+            TryKickSpawner("Start(Offline)");
     }
 
-    private IEnumerator BindWhenModelExists()
+    public override void OnNetworkSpawn()
+    {
+        // We want ALL clients to spawn visuals locally so everyone sees them.
+        // (Host is also a client, so this runs there too.)
+        if (!IsClient) return;
+
+        TryKickSpawner("OnNetworkSpawn");
+    }
+
+    private void TryKickSpawner(string reason)
+    {
+        // Prevent spamming coroutines but allow re-run if modelRoot was missing.
+        if (routine != null) StopCoroutine(routine);
+        routine = StartCoroutine(SpawnAndBindWhenReady(reason));
+    }
+
+    private IEnumerator SpawnAndBindWhenReady(string reason)
     {
         float start = Time.time;
 
-        while (true)
+        // We can attempt multiple times safely.
+        hasAttemptedSpawn = true;
+
+        while (Time.time - start < waitForModelRootTimeout)
         {
-            // If ModelRoot ref got lost / not assigned yet, try to reacquire it
-            if (modelRoot == null)
-            {
-                if (networkRoot == null && netObj != null) networkRoot = netObj.transform;
-                if (networkRoot == null) networkRoot = transform;
+            EnsureModelRootIsValid();
 
-                Transform mr = networkRoot.Find("ModelRoot");
-                if (mr != null) modelRoot = mr;
-            }
-
-            if (modelRoot != null && modelRoot.childCount > 0)
+            if (modelRoot != null)
                 break;
-
-            if (Time.time - start > waitForModelTimeout)
-            {
-                Debug.LogWarning("[PlayerSpawner] Timed out waiting for model under ModelRoot.");
-                break;
-            }
 
             yield return null;
         }
 
+        EnsureModelRootIsValid();
+
+        if (modelRoot == null)
+        {
+            Debug.LogError($"[PlayerSpawner] ModelRoot NOT found under Player '{name}'. " +
+                           $"Make sure Player prefab has a child named 'ModelRoot'. Reason={reason}");
+            DumpChildren(playerRoot, 3);
+            yield break;
+        }
+
+        // If already has a child, just rebind.
+        if (modelRoot.childCount > 0)
+        {
+            if (debugLogs)
+                Debug.Log($"[PlayerSpawner] Model already exists under ModelRoot ({GetPath(modelRoot, playerRoot)}). Rebinding. Reason={reason}");
+
+            RebindFromCurrentModel();
+            yield break;
+        }
+
+        // Spawn
+        bool spawned = SpawnModelUnderModelRoot();
+        if (!spawned)
+            yield break;
+
+        // Bind
         RebindFromCurrentModel();
+    }
+
+    private void EnsureModelRootIsValid()
+    {
+        // If not assigned, find it under THIS player instance only.
+        if (modelRoot == null)
+        {
+            modelRoot = FindDeepChild(playerRoot, "ModelRoot");
+        }
+        else
+        {
+            // If it points to something not under THIS player (wrong reference), reacquire.
+            if (!modelRoot.IsChildOf(playerRoot) && modelRoot != playerRoot)
+            {
+                if (debugLogs)
+                    Debug.LogWarning($"[PlayerSpawner] modelRoot reference was NOT under this Player '{name}'. Re-acquiring.");
+
+                modelRoot = FindDeepChild(playerRoot, "ModelRoot");
+            }
+        }
+    }
+
+    private bool SpawnModelUnderModelRoot()
+    {
+        if (characterPrefabs == null || characterPrefabs.Length == 0)
+        {
+            Debug.LogError("[PlayerSpawner] No characterPrefabs assigned on PlayerSpawner.");
+            return false;
+        }
+
+        int idx = Mathf.Clamp(defaultCharacterIndex, 0, characterPrefabs.Length - 1);
+        GameObject prefab = characterPrefabs[idx];
+
+        if (prefab == null)
+        {
+            Debug.LogError($"[PlayerSpawner] characterPrefabs[{idx}] is NULL.");
+            return false;
+        }
+
+        // Instantiate without parent first, then SetParent(worldPositionStays=false)
+        // so LOCAL transform is guaranteed to apply cleanly.
+        GameObject modelInstance = Instantiate(prefab);
+        modelInstance.name = $"Model(Owner {OwnerClientId})";
+
+        Transform t = modelInstance.transform;
+        t.SetParent(modelRoot, false);
+        t.localPosition = modelLocalPosition;
+        t.localRotation = Quaternion.Euler(modelLocalEuler);
+        t.localScale = modelLocalScale;
+
+        if (debugLogs)
+        {
+            string nm = (NetworkManager.Singleton != null) ? NetworkManager.Singleton.LocalClientId.ToString() : "offline";
+            Debug.Log($"[PlayerSpawner] Spawned model '{prefab.name}' under '{GetPath(modelRoot, playerRoot)}' " +
+                      $"(localClient={nm}, owner={OwnerClientId}).");
+        }
+
+        return true;
     }
 
     public void RebindFromCurrentModel()
     {
-        if (networkRoot == null)
-        {
-            Debug.LogError("[PlayerSpawner] Network root missing.");
-            return;
-        }
+        EnsureModelRootIsValid();
 
         if (modelRoot == null)
         {
-            Debug.LogError("[PlayerSpawner] ModelRoot missing. Create a child named 'ModelRoot' under the PLAYER ROOT and assign it.");
+            Debug.LogError("[PlayerSpawner] Rebind failed: modelRoot is null.");
             return;
         }
 
         if (modelRoot.childCount == 0)
         {
-            Debug.LogWarning("[PlayerSpawner] No model exists under ModelRoot yet.");
+            Debug.LogWarning("[PlayerSpawner] Rebind: No model under ModelRoot.");
             return;
         }
 
         GameObject model = modelRoot.GetChild(0).gameObject;
 
-        // Animator binding (for MovementAnimation)
         Animator anim = model.GetComponentInChildren<Animator>(true);
         if (anim == null)
         {
-            Debug.LogError("[PlayerSpawner] Animator missing on spawned model!");
+            Debug.LogWarning("[PlayerSpawner] No Animator found inside the spawned model. (Spawning is still OK.)");
         }
         else
         {
-            // ✅ Prefer root for scripts (since you're migrating everything off cylinder)
-            MovementAnimation animScript = networkRoot.GetComponent<MovementAnimation>();
-            if (animScript == null && cylinder != null)
-                animScript = cylinder.GetComponent<MovementAnimation>();
-
-            if (animScript != null)
-                animScript.SetAnimator(anim);
+            if (movementAnimation != null)
+                movementAnimation.SetAnimator(anim);
         }
 
         Transform holdPoint = FindDeepChild(model.transform, "HoldPoint");
-
-        bool isOwner = (netObj != null && netObj.IsOwner);
-
-        if (isOwner)
+        if (holdPoint != null)
         {
-            // ✅ Prefer root for Interaction/Inventory (since those should live on the player root)
-            Interaction interaction = networkRoot.GetComponent<Interaction>();
-            if (interaction == null && cylinder != null)
-                interaction = cylinder.GetComponent<Interaction>();
-
-            if (interaction != null && holdPoint != null)
-                interaction.SetHoldPoint(holdPoint);
-
-            PlayerInventory inventory = networkRoot.GetComponent<PlayerInventory>();
-            if (inventory == null && cylinder != null)
-                inventory = cylinder.GetComponent<PlayerInventory>();
-
-            if (inventory != null && holdPoint != null)
-                inventory.handPoint = holdPoint;
+            if (interaction != null) interaction.SetHoldPoint(holdPoint);
+            if (inventory != null) inventory.handPoint = holdPoint;
         }
 
-        if (netObj != null)
-        {
-            gameObject.name = $"PlayerSpawner(Owner {netObj.OwnerClientId})";
-            model.name = $"Model(Owner {netObj.OwnerClientId})";
-        }
-
-        Debug.Log($"[PlayerSpawner] Rebind complete. isOwner={isOwner}");
+        if (debugLogs)
+            Debug.Log($"[PlayerSpawner] Rebind complete. model='{model.name}' root='{name}'");
     }
 
     private Transform FindDeepChild(Transform parent, string childName)
     {
+        if (parent == null) return null;
         foreach (Transform t in parent.GetComponentsInChildren<Transform>(true))
-        {
-            if (t.name == childName)
-                return t;
-        }
+            if (t.name == childName) return t;
         return null;
+    }
+
+    private string GetPath(Transform t, Transform stopAt)
+    {
+        if (t == null) return "(null)";
+        string path = t.name;
+        Transform cur = t.parent;
+
+        while (cur != null && cur != stopAt)
+        {
+            path = cur.name + "/" + path;
+            cur = cur.parent;
+        }
+
+        if (stopAt != null)
+            path = stopAt.name + "/" + path;
+
+        return path;
+    }
+
+    private void DumpChildren(Transform root, int depth)
+    {
+        if (root == null) return;
+        Debug.Log($"[PlayerSpawner] DumpChildren '{root.name}' depth={depth}");
+        DumpRecursive(root, depth, 0);
+    }
+
+    private void DumpRecursive(Transform t, int maxDepth, int d)
+    {
+        if (t == null || d > maxDepth) return;
+
+        string indent = new string(' ', d * 2);
+        Debug.Log($"{indent}- {t.name} active={t.gameObject.activeSelf} comps={t.GetComponents<Component>().Length}");
+
+        foreach (Transform c in t)
+            DumpRecursive(c, maxDepth, d + 1);
     }
 }
