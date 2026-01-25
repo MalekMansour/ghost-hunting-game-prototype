@@ -18,7 +18,6 @@ public class MovementAnimation : MonoBehaviour
     {
         animator = anim;
 
-        // Always try to resolve movement when animator is assigned
         ResolvePlayerMovement(true);
 
         if (playerMovement == null)
