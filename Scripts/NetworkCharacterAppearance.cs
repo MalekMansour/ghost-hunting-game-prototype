@@ -1,50 +1,42 @@
 using UnityEngine;
 using Unity.Netcode;
+using System.Collections;
 
+[RequireComponent(typeof(PlayerSpawner))]
 public class NetworkCharacterAppearance : NetworkBehaviour
 {
-    [System.Serializable]
-    public class Character
-    {
-        public string characterName;
-        public GameObject prefab; // visual model prefab (NOT networked)
-    }
+    [Header("Debug")]
+    public bool debugLogs = true;
 
-    [Header("Characters")]
-    [SerializeField] private Character[] characters;
-
-    [Header("Where to spawn the visual model")]
-    [SerializeField] private Transform modelRoot;
-
-    // SERVER-OWNED value (each player has their own copy)
+    // SERVER-owned per-player value
     private readonly NetworkVariable<int> characterIndex = new NetworkVariable<int>(
         0,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server
     );
 
-    // Prevent spamming
+    private PlayerSpawner spawner;
+
+    // Prevents spamming, but still allows resend if needed
     private bool sentChoiceToServer = false;
+
+    private void Awake()
+    {
+        spawner = GetComponent<PlayerSpawner>();
+    }
 
     public override void OnNetworkSpawn()
     {
-        // Fallback if you forgot to drag it in inspector
-        if (modelRoot == null)
-            modelRoot = transform.Find("ModelRoot");
-
-        if (modelRoot == null)
-            Debug.LogWarning("[NetworkCharacterAppearance] modelRoot is NULL. Create/assign a child 'ModelRoot'.");
+        if (spawner == null) spawner = GetComponent<PlayerSpawner>();
 
         characterIndex.OnValueChanged += OnCharacterIndexChanged;
 
-        // Apply current value immediately (important for late joiners)
-        ApplyCharacter(characterIndex.Value);
+        // Apply server value immediately (late joiners)
+        ApplyCharacter(characterIndex.Value, "OnNetworkSpawn initial");
 
-        // ✅ FIX: send the owner’s LocalSelection to server once
-        TrySendOwnerChoiceToServerOnce();
-
-        // Naming: make it consistent on every client once spawned
-        UpdateNames(characterIndex.Value);
+        // Owner sends their choice AFTER one frame (so LocalSelection is ready)
+        if (IsOwner)
+            StartCoroutine(SendOwnerChoiceNextFrame());
     }
 
     public override void OnNetworkDespawn()
@@ -52,160 +44,121 @@ public class NetworkCharacterAppearance : NetworkBehaviour
         characterIndex.OnValueChanged -= OnCharacterIndexChanged;
     }
 
-    // If ownership ever changes, ensure the new owner pushes their selection once
     public override void OnGainedOwnership()
     {
-        TrySendOwnerChoiceToServerOnce();
+        sentChoiceToServer = false; // allow the new owner to send
+        if (IsOwner)
+            StartCoroutine(SendOwnerChoiceNextFrame());
     }
 
     private void OnCharacterIndexChanged(int oldValue, int newValue)
     {
-        ApplyCharacter(newValue);
+        ApplyCharacter(newValue, $"OnValueChanged {oldValue}->{newValue}");
         UpdateNames(newValue);
     }
 
-    /// <summary>
-    /// ✅ Key fix:
-    /// Use LocalSelection.SelectedCharacterIndex (per instance in MP Play Mode),
-    /// not PlayerPrefs (shared and causes “everyone becomes the same”).
-    /// </summary>
-    private void TrySendOwnerChoiceToServerOnce()
+    private IEnumerator SendOwnerChoiceNextFrame()
+    {
+        // wait 1 frame so CharacterSelector had time to set LocalSelection
+        yield return null;
+
+        TrySendOwnerChoiceToServer();
+    }
+
+    private void TrySendOwnerChoiceToServer()
     {
         if (!IsSpawned) return;
         if (!IsOwner) return;
-        if (sentChoiceToServer) return;
 
-        if (characters == null || characters.Length == 0)
+        if (spawner == null) spawner = GetComponent<PlayerSpawner>();
+        if (spawner == null || spawner.characterPrefabs == null || spawner.characterPrefabs.Length == 0)
         {
-            Debug.LogError("[NetworkCharacterAppearance] No characters assigned!");
+            Debug.LogError("[NetworkCharacterAppearance] PlayerSpawner.characterPrefabs is empty/not assigned on the Player prefab.");
             return;
         }
 
-        int chosen = GetChosenIndexFromLocalSelection();
-        chosen = Mathf.Clamp(chosen, 0, Mathf.Max(0, characters.Length - 1));
+        int chosen = LocalSelection.SelectedCharacterIndex;
+        chosen = Mathf.Clamp(chosen, 0, spawner.characterPrefabs.Length - 1);
 
-        // Host is both server+client: set directly (no RPC needed)
+        // IMPORTANT: if we already sent AND it matches current server value, skip
+        if (sentChoiceToServer && characterIndex.Value == chosen)
+        {
+            if (debugLogs) Debug.Log($"[NetworkCharacterAppearance] Choice already synced ({chosen}).");
+            return;
+        }
+
         if (IsServer)
         {
-            Debug.Log($"[NetworkCharacterAppearance] Host owner setting characterIndex directly = {chosen}");
+            // Host shortcut
             SetCharacterIndexServer(chosen);
         }
         else
         {
-            Debug.Log($"[NetworkCharacterAppearance] Client owner sending characterIndex to server via RPC = {chosen}");
             SetCharacterServerRpc(chosen);
         }
 
         sentChoiceToServer = true;
-    }
 
-    private int GetChosenIndexFromLocalSelection()
-    {
-        // ✅ Your CharacterSelector sets this on Start and on ApplySelection/Next/Previous
-        // This is the per-instance value you want in Multiplayer Play Mode.
-        int chosen = 0;
-
-        // If LocalSelection exists, use it.
-        // (Assumes you already have a LocalSelection class because your selector uses it.)
-        chosen = LocalSelection.SelectedCharacterIndex;
-
-        // Safety fallback if something didn't initialize yet:
-        // (Won't break anything; it just prevents invalid values.)
-        if (chosen < 0)
-            chosen = 0;
-
-        return chosen;
+        if (debugLogs)
+            Debug.Log($"[NetworkCharacterAppearance] Owner sent chosen index={chosen} (OwnerClientId={OwnerClientId})");
     }
 
     /// <summary>
-    /// Call this from the SERVER after spawning the player object (recommended).
-    /// Example: NetworkGameFlow sets it after SpawnAsPlayerObject().
+    /// Server can set it directly (optional usage)
     /// </summary>
     public void SetCharacterIndexServer(int index)
     {
         if (!IsServer)
         {
-            Debug.LogWarning("[NetworkCharacterAppearance] SetCharacterIndexServer called on a non-server instance.");
+            Debug.LogWarning("[NetworkCharacterAppearance] SetCharacterIndexServer called on non-server.");
             return;
         }
 
-        if (characters == null || characters.Length == 0)
-        {
-            Debug.LogError("[NetworkCharacterAppearance] No characters assigned!");
-            return;
-        }
+        if (spawner == null) spawner = GetComponent<PlayerSpawner>();
+        int max = (spawner != null && spawner.characterPrefabs != null) ? spawner.characterPrefabs.Length - 1 : 0;
+        if (max < 0) max = 0;
 
-        index = Mathf.Clamp(index, 0, characters.Length - 1);
+        index = Mathf.Clamp(index, 0, max);
         characterIndex.Value = index;
 
-        Debug.Log($"[NetworkCharacterAppearance] Server set characterIndex={index} for OwnerClientId={OwnerClientId}");
+        if (debugLogs)
+            Debug.Log($"[NetworkCharacterAppearance] Server set characterIndex={index} for OwnerClientId={OwnerClientId}");
     }
 
     [ServerRpc(RequireOwnership = true)]
     public void SetCharacterServerRpc(int index)
     {
-        if (characters == null || characters.Length == 0)
-        {
-            Debug.LogError("[NetworkCharacterAppearance] No characters assigned!");
-            return;
-        }
+        if (spawner == null) spawner = GetComponent<PlayerSpawner>();
+        int max = (spawner != null && spawner.characterPrefabs != null) ? spawner.characterPrefabs.Length - 1 : 0;
+        if (max < 0) max = 0;
 
-        index = Mathf.Clamp(index, 0, characters.Length - 1);
+        index = Mathf.Clamp(index, 0, max);
         characterIndex.Value = index;
 
-        Debug.Log($"[NetworkCharacterAppearance] Server set characterIndex={index} for OwnerClientId={OwnerClientId} (via ServerRpc)");
+        if (debugLogs)
+            Debug.Log($"[NetworkCharacterAppearance] Server set characterIndex={index} for OwnerClientId={OwnerClientId} (via ServerRpc)");
     }
 
-    private void ApplyCharacter(int index)
+    private void ApplyCharacter(int index, string reason)
     {
-        if (!IsClient) return; // visuals only
-        if (characters == null || characters.Length == 0) return;
-        if (index < 0 || index >= characters.Length) return;
+        // Everyone applies visuals locally
+        if (!IsClient) return;
 
-        if (modelRoot == null)
+        if (spawner == null) spawner = GetComponent<PlayerSpawner>();
+        if (spawner == null)
         {
-            Debug.LogError("[NetworkCharacterAppearance] ModelRoot is missing! Create a child named 'ModelRoot' and assign it.");
+            Debug.LogError("[NetworkCharacterAppearance] Missing PlayerSpawner component.");
             return;
         }
 
-        // Clear old model
-        for (int i = modelRoot.childCount - 1; i >= 0; i--)
-            Destroy(modelRoot.GetChild(i).gameObject);
+        // Use PlayerSpawner as the ONLY model spawner (so ModelRoot path is correct)
+        spawner.SpawnOrSwapModel(index, reason);
 
-        // Spawn new model
-        GameObject model = Instantiate(characters[index].prefab, modelRoot);
-        model.transform.localPosition = Vector3.zero;
-        model.transform.localRotation = Quaternion.identity;
-
-        // Apply ModelScaler if it exists on the model
-        ModelScaler scaler = model.GetComponent<ModelScaler>();
-        if (scaler != null)
-            scaler.ApplyScale();
-
-        // Name model nicely
-        model.name = $"Model({characters[index].characterName})";
-
-        Debug.Log($"[NetworkCharacterAppearance] Applied character '{characters[index].characterName}' to Player({OwnerClientId})");
-
-        PlayerSpawner spawner = GetComponent<PlayerSpawner>();
-        if (spawner != null)
-            spawner.RebindFromCurrentModel();
+        UpdateNames(index);
     }
 
     private void UpdateNames(int index)
     {
-        // Name player nicely in hierarchy (local-only)
-        gameObject.name = $"Player({OwnerClientId})";
-
-        // Also put character name
-        if (characters != null && index >= 0 && index < characters.Length)
-            gameObject.name = $"Player({OwnerClientId})-{characters[index].characterName}";
-    }
-
-    // Helper so the fallback doesn't overwrite a value the server already decided.
-    private bool HasServerChosenValueYet()
-    {
-        if (modelRoot == null) return false;
-        return modelRoot.childCount > 0;
+        gameObject.name = $"Player({OwnerClientId})-Char{index}";
     }
 }
