@@ -109,13 +109,13 @@ public class PlayerSpawner : NetworkBehaviour
             yield break;
         }
 
-        // Spawn
-        bool spawned = SpawnModelUnderModelRoot();
+        // Spawn (default/offline/early fallback)
+        bool spawned = SpawnModelUnderModelRoot(out GameObject spawnedModel);
         if (!spawned)
             yield break;
 
-        // Bind
-        RebindFromCurrentModel();
+        // Bind (use the exact model we spawned)
+        RebindFromModel(spawnedModel);
     }
 
     private void EnsureModelRootIsValid()
@@ -138,8 +138,11 @@ public class PlayerSpawner : NetworkBehaviour
         }
     }
 
-    private bool SpawnModelUnderModelRoot()
+    // ✅ changed signature to give us the spawned instance safely
+    private bool SpawnModelUnderModelRoot(out GameObject spawnedModel)
     {
+        spawnedModel = null;
+
         if (characterPrefabs == null || characterPrefabs.Length == 0)
         {
             Debug.LogError("[PlayerSpawner] No characterPrefabs assigned on PlayerSpawner.");
@@ -155,8 +158,6 @@ public class PlayerSpawner : NetworkBehaviour
             return false;
         }
 
-        // Instantiate without parent first, then SetParent(worldPositionStays=false)
-        // so LOCAL transform is guaranteed to apply cleanly.
         GameObject modelInstance = Instantiate(prefab);
         modelInstance.name = $"Model(Owner {OwnerClientId})";
 
@@ -165,6 +166,8 @@ public class PlayerSpawner : NetworkBehaviour
         t.localPosition = modelLocalPosition;
         t.localRotation = Quaternion.Euler(modelLocalEuler);
         t.localScale = modelLocalScale;
+
+        spawnedModel = modelInstance;
 
         if (debugLogs)
         {
@@ -176,6 +179,108 @@ public class PlayerSpawner : NetworkBehaviour
         return true;
     }
 
+    // =========================================================
+    // ✅ Character Picker / NetworkCharacterAppearance hook
+    // =========================================================
+    public void SpawnOrSwapModel(int characterIndex, string reason = "External")
+    {
+        EnsureModelRootIsValid();
+
+        if (modelRoot == null)
+        {
+            if (debugLogs)
+                Debug.LogWarning($"[PlayerSpawner] SpawnOrSwapModel aborted: modelRoot is null. Reason={reason}");
+            return;
+        }
+
+        if (characterPrefabs == null || characterPrefabs.Length == 0)
+        {
+            Debug.LogError("[PlayerSpawner] SpawnOrSwapModel: No characterPrefabs assigned on PlayerSpawner.");
+            return;
+        }
+
+        int idx = Mathf.Clamp(characterIndex, 0, characterPrefabs.Length - 1);
+        GameObject prefab = characterPrefabs[idx];
+
+        if (prefab == null)
+        {
+            Debug.LogError($"[PlayerSpawner] SpawnOrSwapModel: characterPrefabs[{idx}] is NULL.");
+            return;
+        }
+
+        // ✅ CRITICAL FIX:
+        // Destroy() is end-of-frame, so we must remove children from ModelRoot immediately,
+        // otherwise RebindFromCurrentModel() might grab the old model.
+        for (int i = modelRoot.childCount - 1; i >= 0; i--)
+        {
+            Transform c = modelRoot.GetChild(i);
+            c.SetParent(null, false);          // remove from ModelRoot NOW
+            Destroy(c.gameObject);             // destroy end-of-frame (fine)
+        }
+
+        // Spawn chosen model
+        GameObject modelInstance = Instantiate(prefab);
+        modelInstance.name = $"Model(idx {idx} | owner {OwnerClientId})";
+
+        Transform t = modelInstance.transform;
+        t.SetParent(modelRoot, false);
+        t.localPosition = modelLocalPosition;
+        t.localRotation = Quaternion.Euler(modelLocalEuler);
+        t.localScale = modelLocalScale;
+
+        if (debugLogs)
+        {
+            string nm = (NetworkManager.Singleton != null) ? NetworkManager.Singleton.LocalClientId.ToString() : "offline";
+            Debug.Log($"[PlayerSpawner] SpawnOrSwapModel spawned '{prefab.name}' idx={idx} under '{GetPath(modelRoot, playerRoot)}' " +
+                      $"(localClient={nm}, owner={OwnerClientId}). Reason={reason}");
+        }
+
+        // ✅ Bind using the exact spawned instance (not child[0])
+        RebindFromModel(modelInstance);
+    }
+
+    // ✅ NEW helper: binds animator/holdpoint using a specific model instance
+    private void RebindFromModel(GameObject model)
+    {
+        if (model == null)
+        {
+            RebindFromCurrentModel();
+            return;
+        }
+
+        // reacquire optional scripts safely
+        if (movementAnimation == null) movementAnimation = playerRoot.GetComponent<MovementAnimation>();
+        if (interaction == null) interaction = playerRoot.GetComponent<Interaction>();
+        if (inventory == null) inventory = playerRoot.GetComponent<PlayerInventory>();
+
+        Animator anim = model.GetComponentInChildren<Animator>(true);
+        if (anim == null)
+        {
+            Debug.LogWarning("[PlayerSpawner] No Animator found inside the spawned model. (Spawning is still OK.)");
+        }
+        else
+        {
+            // Make sure animator is "awake" after Instantiate/Swap
+            if (!anim.enabled) anim.enabled = true;
+            anim.Rebind();
+            anim.Update(0f);
+
+            if (movementAnimation != null)
+                movementAnimation.SetAnimator(anim);
+        }
+
+        Transform holdPoint = FindDeepChild(model.transform, "HoldPoint");
+        if (holdPoint != null)
+        {
+            if (interaction != null) interaction.SetHoldPoint(holdPoint);
+            if (inventory != null) inventory.handPoint = holdPoint;
+        }
+
+        if (debugLogs)
+            Debug.Log($"[PlayerSpawner] Rebind complete. model='{model.name}' root='{name}'");
+    }
+
+    // Your old method stays (nothing removed)
     public void RebindFromCurrentModel()
     {
         EnsureModelRootIsValid();
@@ -193,27 +298,7 @@ public class PlayerSpawner : NetworkBehaviour
         }
 
         GameObject model = modelRoot.GetChild(0).gameObject;
-
-        Animator anim = model.GetComponentInChildren<Animator>(true);
-        if (anim == null)
-        {
-            Debug.LogWarning("[PlayerSpawner] No Animator found inside the spawned model. (Spawning is still OK.)");
-        }
-        else
-        {
-            if (movementAnimation != null)
-                movementAnimation.SetAnimator(anim);
-        }
-
-        Transform holdPoint = FindDeepChild(model.transform, "HoldPoint");
-        if (holdPoint != null)
-        {
-            if (interaction != null) interaction.SetHoldPoint(holdPoint);
-            if (inventory != null) inventory.handPoint = holdPoint;
-        }
-
-        if (debugLogs)
-            Debug.Log($"[PlayerSpawner] Rebind complete. model='{model.name}' root='{name}'");
+        RebindFromModel(model);
     }
 
     private Transform FindDeepChild(Transform parent, string childName)
