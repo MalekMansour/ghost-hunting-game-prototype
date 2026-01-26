@@ -1,5 +1,6 @@
 using System.Collections;
 using UnityEngine;
+using UnityEngine.UI;          // ✅ ADD
 using Unity.Netcode;
 
 public class PlayerSpawner : NetworkBehaviour
@@ -26,6 +27,25 @@ public class PlayerSpawner : NetworkBehaviour
     public Interaction interaction;
     public PlayerInventory inventory;
 
+    // =========================================================
+    // ✅ NEW: Fadeout Screen (Image in Player Canvas)
+    // =========================================================
+    [Header("Fadeout Screen (Player Canvas)")]
+    [Tooltip("Assign the black Image (fadeout screen) here OR it will auto-find by name.")]
+    public Image fadeoutScreen;
+
+    [Tooltip("Auto-find by name if fadeoutScreen is null.")]
+    public string fadeoutScreenName = "FadeoutScreen";
+
+    [Tooltip("Seconds to fade out.")]
+    public float fadeOutSeconds = 6f;
+
+    [Tooltip("Disable after fade completes.")]
+    public bool disableAfterFade = true;
+
+    private bool fadeStarted = false;
+    private Coroutine fadeRoutine;
+
     [Header("Debug")]
     public bool debugLogs = true;
 
@@ -47,22 +67,30 @@ public class PlayerSpawner : NetworkBehaviour
     {
         // Covers cases where this gets enabled AFTER spawn / after owner-only toggles.
         TryKickSpawner("OnEnable");
+
+        // ✅ NEW: start fade once
+        TryFadeOut();
     }
 
     private void Start()
     {
         // Offline safety + extra reliability if OnNetworkSpawn timing is weird.
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
+        {
             TryKickSpawner("Start(Offline)");
+            TryFadeOut();
+        }
     }
 
     public override void OnNetworkSpawn()
     {
         // We want ALL clients to spawn visuals locally so everyone sees them.
-        // (Host is also a client, so this runs there too.)
         if (!IsClient) return;
 
         TryKickSpawner("OnNetworkSpawn");
+
+        // ✅ NEW: start fade once after net spawn too
+        TryFadeOut();
     }
 
     private void TryKickSpawner(string reason)
@@ -116,6 +144,9 @@ public class PlayerSpawner : NetworkBehaviour
 
         // Bind (use the exact model we spawned)
         RebindFromModel(spawnedModel);
+
+        // ✅ NEW: also try fade after spawn/bind (still only once)
+        TryFadeOut();
     }
 
     private void EnsureModelRootIsValid()
@@ -208,17 +239,13 @@ public class PlayerSpawner : NetworkBehaviour
             return;
         }
 
-        // ✅ CRITICAL FIX:
-        // Destroy() is end-of-frame, so we must remove children from ModelRoot immediately,
-        // otherwise RebindFromCurrentModel() might grab the old model.
         for (int i = modelRoot.childCount - 1; i >= 0; i--)
         {
             Transform c = modelRoot.GetChild(i);
-            c.SetParent(null, false);          // remove from ModelRoot NOW
-            Destroy(c.gameObject);             // destroy end-of-frame (fine)
+            c.SetParent(null, false);
+            Destroy(c.gameObject);
         }
 
-        // Spawn chosen model
         GameObject modelInstance = Instantiate(prefab);
         modelInstance.name = $"Model(idx {idx} | owner {OwnerClientId})";
 
@@ -235,11 +262,9 @@ public class PlayerSpawner : NetworkBehaviour
                       $"(localClient={nm}, owner={OwnerClientId}). Reason={reason}");
         }
 
-        // ✅ Bind using the exact spawned instance (not child[0])
         RebindFromModel(modelInstance);
     }
 
-    // ✅ NEW helper: binds animator/holdpoint using a specific model instance
     private void RebindFromModel(GameObject model)
     {
         if (model == null)
@@ -248,7 +273,6 @@ public class PlayerSpawner : NetworkBehaviour
             return;
         }
 
-        // reacquire optional scripts safely
         if (movementAnimation == null) movementAnimation = playerRoot.GetComponent<MovementAnimation>();
         if (interaction == null) interaction = playerRoot.GetComponent<Interaction>();
         if (inventory == null) inventory = playerRoot.GetComponent<PlayerInventory>();
@@ -260,7 +284,6 @@ public class PlayerSpawner : NetworkBehaviour
         }
         else
         {
-            // Make sure animator is "awake" after Instantiate/Swap
             if (!anim.enabled) anim.enabled = true;
             anim.Rebind();
             anim.Update(0f);
@@ -280,7 +303,6 @@ public class PlayerSpawner : NetworkBehaviour
             Debug.Log($"[PlayerSpawner] Rebind complete. model='{model.name}' root='{name}'");
     }
 
-    // Your old method stays (nothing removed)
     public void RebindFromCurrentModel()
     {
         EnsureModelRootIsValid();
@@ -343,5 +365,73 @@ public class PlayerSpawner : NetworkBehaviour
 
         foreach (Transform c in t)
             DumpRecursive(c, maxDepth, d + 1);
+    }
+
+    // =========================================================
+    // ✅ NEW: simple fade out (alpha 1 -> 0, then disable)
+    // =========================================================
+    private void TryFadeOut()
+    {
+        if (fadeStarted) return;
+
+        if (fadeoutScreen == null)
+        {
+            // auto-find under THIS player only
+            Image[] imgs = GetComponentsInChildren<Image>(true);
+            foreach (var img in imgs)
+            {
+                if (img != null && (img.name == fadeoutScreenName || img.name.Equals(fadeoutScreenName, System.StringComparison.OrdinalIgnoreCase)))
+                {
+                    fadeoutScreen = img;
+                    break;
+                }
+            }
+        }
+
+        if (fadeoutScreen == null) return;
+
+        fadeStarted = true;
+
+        // force visible at start
+        fadeoutScreen.gameObject.SetActive(true);
+        fadeoutScreen.enabled = true;
+
+        Color c = fadeoutScreen.color;
+        c.a = 1f;
+        fadeoutScreen.color = c;
+
+        if (fadeRoutine != null) StopCoroutine(fadeRoutine);
+        fadeRoutine = StartCoroutine(FadeOutImage());
+    }
+
+    private IEnumerator FadeOutImage()
+    {
+        float dur = Mathf.Max(0.01f, fadeOutSeconds);
+
+        float t = 0f;
+        while (t < 1f && fadeoutScreen != null)
+        {
+            t += Time.unscaledDeltaTime / dur;
+
+            Color c = fadeoutScreen.color;
+            c.a = Mathf.Lerp(1f, 0f, t);
+            fadeoutScreen.color = c;
+
+            yield return null;
+        }
+
+        if (fadeoutScreen != null)
+        {
+            // hard set to 0 alpha
+            Color c = fadeoutScreen.color;
+            c.a = 0f;
+            fadeoutScreen.color = c;
+
+            if (disableAfterFade)
+            {
+                fadeoutScreen.enabled = false;                 // ✅ disables the Image renderer
+                fadeoutScreen.gameObject.SetActive(false);     // ✅ turns off the object completely
+            }
+        }
     }
 }
