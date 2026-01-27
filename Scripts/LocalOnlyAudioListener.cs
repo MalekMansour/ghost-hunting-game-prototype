@@ -18,16 +18,21 @@ public class LocalOnlyAudioListener : NetworkBehaviour
 
     private void Start()
     {
-        // Offline / single-player safety
+        // Offline safety (no Netcode running)
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
         {
-            listener.enabled = true;
+            if (listener != null) listener.enabled = true;
         }
     }
 
     private void Apply()
     {
-        // ONLY the local owner hears
+        if (listener == null) return;
+
+        // Only the OWNER hears through their listener
         listener.enabled = IsOwner;
     }
+
+    public override void OnGainedOwnership() => Apply();
+    public override void OnLostOwnership() => Apply();
 }
