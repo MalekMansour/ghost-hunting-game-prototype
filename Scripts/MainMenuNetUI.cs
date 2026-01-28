@@ -1,7 +1,7 @@
 using System;
-using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.UI; // <--- for Button
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using TMPro;
@@ -22,11 +22,20 @@ public class MainMenuNetUI : MonoBehaviour
     [SerializeField] private TMP_Text connectingText;
     [SerializeField] private float connectingMinSeconds = 7f;
 
-    [SerializeField] private GameObject hostMenuPanel;
+    [SerializeField] private GameObject hostMenuPanel; // this is really your lobby panel
     [SerializeField] private TMP_Text lobbyCodeText;
 
     [SerializeField] private TMP_InputField joinCodeInput;
     [SerializeField] private TMP_Text joinStatusText;
+
+    // ✅ ADDED: the panel/page that contains your Enter Code UI (input + join button)
+    [Header("Join Page UI (Enter Code Page)")]
+    [SerializeField] private GameObject joinMenuPanel; // assign your "Enter Code" page/panel here
+
+    [Header("Lobby UI Control (Host-only)")]
+    [SerializeField] private Button startButton;                 // assign your Start button here
+    [SerializeField] private Selectable[] hostOnlyControls;      // map arrows, difficulty arrows, etc.
+    [SerializeField] private TMP_Text hostOnlyHintText;          // optional: "Waiting for host..." text
 
     [Header("Timeouts")]
     [SerializeField] private float connectTimeoutSeconds = 15f;
@@ -57,6 +66,18 @@ public class MainMenuNetUI : MonoBehaviour
         UnhookNetcodeEvents();
     }
 
+    private void SetConnectionDataFromCharacterUI()
+    {
+        int index = LocalSelection.SelectedCharacterIndex;
+
+        // 4 bytes int
+        byte[] payload = BitConverter.GetBytes(index);
+
+        networkManager.NetworkConfig.ConnectionData = payload;
+
+        Debug.Log($"[MainMenuNetUI] ConnectionData set to character index={index}");
+    }
+
     // ===================== NETCODE EVENTS (DEBUG) =====================
     private void HookNetcodeEvents()
     {
@@ -81,11 +102,23 @@ public class MainMenuNetUI : MonoBehaviour
     private void OnClientConnected(ulong id)
     {
         Debug.Log($"[MainMenuNetUI] ✅ OnClientConnected: {id} | LocalClientId={networkManager.LocalClientId}");
+
+        // If we are connected as a client, make sure lobby UI is visible
+        // (Sometimes you join and your UI state didn't update properly.)
+        if (networkManager != null && networkManager.IsClient)
+        {
+            // show the lobby panel for clients too
+            if (hostMenuPanel != null && !hostMenuPanel.activeSelf)
+                hostMenuPanel.SetActive(true);
+
+            ApplyLobbyPermissions();
+        }
     }
 
     private void OnClientDisconnected(ulong id)
     {
         Debug.LogWarning($"[MainMenuNetUI] ❌ OnClientDisconnected: {id} | IsListening={networkManager.IsListening}");
+        // Optional: reset UI back to main menu states here if you want.
     }
 
     private void OnTransportFailure()
@@ -93,6 +126,7 @@ public class MainMenuNetUI : MonoBehaviour
         Debug.LogError("[MainMenuNetUI] 🚨 OnTransportFailure fired (Relay/Transport failed).");
     }
 
+    // ===================== SERVICES/AUTH =====================
     private static async Task EnsureServicesReady()
     {
         if (servicesReady) return;
@@ -124,6 +158,7 @@ public class MainMenuNetUI : MonoBehaviour
         }
     }
 
+    // ===================== BUTTONS =====================
     public void HostButton()
     {
         HostServer();
@@ -145,12 +180,16 @@ public class MainMenuNetUI : MonoBehaviour
         JoinServer(joinCodeInput.text.Trim());
     }
 
+    // ===================== HOST =====================
     public async void HostServer()
     {
         if (busy) return;
         busy = true;
 
         float startTime = Time.realtimeSinceStartup;
+
+        // ✅ ADDED: hide enter-code page (if it exists), show loading
+        if (joinMenuPanel != null) joinMenuPanel.SetActive(false);
         ShowConnecting(true, "Connecting...");
 
         try
@@ -184,7 +223,7 @@ public class MainMenuNetUI : MonoBehaviour
                 alloc.Key,
                 alloc.ConnectionData,
                 alloc.ConnectionData,
-                true
+                false
             );
 
             bool started = networkManager.StartHost();
@@ -196,7 +235,6 @@ public class MainMenuNetUI : MonoBehaviour
                 return;
             }
 
-            // Wait for local client to truly connect (id 0)
             bool connected = await WaitForLocalConnect(connectTimeoutSeconds);
             if (!connected)
             {
@@ -209,7 +247,10 @@ public class MainMenuNetUI : MonoBehaviour
 
             await WaitMinConnectingTime(startTime);
             ShowConnecting(false);
+
+            // show lobby for host
             ShowHostMenu(true);
+            ApplyLobbyPermissions(); // host gets control
         }
         catch (Exception e)
         {
@@ -229,6 +270,13 @@ public class MainMenuNetUI : MonoBehaviour
         busy = true;
 
         float startTime = Time.realtimeSinceStartup;
+
+        // ✅ ADDED: clear the input immediately when Join is pressed
+        if (joinCodeInput != null)
+            joinCodeInput.text = "";
+
+        // ✅ ADDED: show loading + hide enter-code page immediately
+        if (joinMenuPanel != null) joinMenuPanel.SetActive(false);
         ShowConnecting(true, "Connecting...");
 
         try
@@ -250,7 +298,6 @@ public class MainMenuNetUI : MonoBehaviour
 
             Debug.Log($"[MainMenuNetUI] Join requested: code='{joinCode}' length={joinCode.Length}");
 
-            // If something is already running, stop it first.
             if (networkManager.IsListening)
             {
                 Debug.LogWarning("[MainMenuNetUI] Join requested while already listening. Shutting down first...");
@@ -267,7 +314,7 @@ public class MainMenuNetUI : MonoBehaviour
                 joinAlloc.Key,
                 joinAlloc.ConnectionData,
                 joinAlloc.HostConnectionData,
-                true
+                false
             );
 
             bool started = networkManager.StartClient();
@@ -279,7 +326,6 @@ public class MainMenuNetUI : MonoBehaviour
                 return;
             }
 
-            // Wait until we truly connect to host (local client connected callback fires)
             bool connected = await WaitForLocalConnect(connectTimeoutSeconds);
             if (!connected)
             {
@@ -290,6 +336,11 @@ public class MainMenuNetUI : MonoBehaviour
 
             await WaitMinConnectingTime(startTime);
             ShowConnecting(false);
+
+            // IMPORTANT: clients should also see lobby UI
+            ShowHostMenu(true);
+            ApplyLobbyPermissions(); // client gets disabled controls
+
             SetJoinStatus("Connected");
         }
         catch (Exception e)
@@ -336,15 +387,14 @@ public class MainMenuNetUI : MonoBehaviour
     {
         float start = Time.realtimeSinceStartup;
 
-        // We consider "connected" when NetworkManager reports we are a client/host AND local client is in ConnectedClients
         while (Time.realtimeSinceStartup - start < timeoutSeconds)
         {
             if (networkManager != null && networkManager.IsListening)
             {
                 ulong localId = networkManager.LocalClientId;
 
-                // For host, local client is also in ConnectedClients
-                if (networkManager.ConnectedClients != null && networkManager.ConnectedClients.ContainsKey(localId))
+                if (networkManager.ConnectedClients != null &&
+                    networkManager.ConnectedClients.ContainsKey(localId))
                     return true;
             }
 
@@ -352,6 +402,36 @@ public class MainMenuNetUI : MonoBehaviour
         }
 
         return false;
+    }
+
+    // ===================== UI PERMISSIONS =====================
+    private void ApplyLobbyPermissions()
+    {
+        bool isHost = (networkManager != null && networkManager.IsHost);
+
+        // start button only for host
+        if (startButton != null)
+            startButton.interactable = isHost;
+
+        // any other host-only controls (map arrows, difficulty arrows)
+        if (hostOnlyControls != null)
+        {
+            for (int i = 0; i < hostOnlyControls.Length; i++)
+            {
+                if (hostOnlyControls[i] != null)
+                    hostOnlyControls[i].interactable = isHost;
+            }
+        }
+
+        // optional hint text
+        if (hostOnlyHintText != null)
+        {
+            hostOnlyHintText.gameObject.SetActive(!isHost);
+            if (!isHost)
+                hostOnlyHintText.text = "Waiting for host to start...";
+        }
+
+        Debug.Log($"[MainMenuNetUI] Lobby permissions applied. isHost={isHost}");
     }
 
     // ===================== UI =====================
@@ -409,7 +489,6 @@ public class MainMenuNetUI : MonoBehaviour
     private void FailUI(float startTime, string msg)
     {
         SetJoinStatus(msg);
-        // Ensure we keep the panel up for the minimum time so it doesn't flash
         _ = FailUIAsync(startTime);
     }
 
@@ -417,5 +496,8 @@ public class MainMenuNetUI : MonoBehaviour
     {
         await WaitMinConnectingTime(startTime);
         ShowConnecting(false);
+
+        // ✅ ADDED: if join fails, bring back the enter-code page (input was already cleared)
+        if (joinMenuPanel != null) joinMenuPanel.SetActive(true);
     }
 }
