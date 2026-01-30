@@ -27,9 +27,7 @@ public class PlayerSpawner : NetworkBehaviour
     public Interaction interaction;
     public PlayerInventory inventory;
 
-    // =========================================================
-    // ✅ NEW: Fadeout Screen (Image in Player Canvas)
-    // =========================================================
+
     [Header("Fadeout Screen (Player Canvas)")]
     [Tooltip("Assign the black Image (fadeout screen) here OR it will auto-find by name.")]
     public Image fadeoutScreen;
