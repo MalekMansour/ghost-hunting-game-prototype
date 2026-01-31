@@ -1,5 +1,5 @@
 # Spectrify
-A multiplayer ghost hunting horror game by MINGO.
+Spectrify is a co-op horror investigation game with up to 6 players, focused on behavior-based ghost identification and intense survival moments.
 
 Maps:
 - The Abyss Asylum 
@@ -334,3 +334,5 @@ Average XP gain: 3500Xp
 Lvl30 -> Lvl31: 4000Xp
 Lvl31 -> Lvl32: 4050Xp
 Lvl32 -> Lvl33: 4100Xp
+
+
