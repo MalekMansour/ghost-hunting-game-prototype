@@ -335,4 +335,30 @@ Lvl30 -> Lvl31: 4000Xp
 Lvl31 -> Lvl32: 4050Xp
 Lvl32 -> Lvl33: 4100Xp
 
+Stats:
+Favorite Map (most played map)
+Total amount of deaths
+Total amount of games played
+Total amount of ghost guessed correctly 
+Total amount of ghost guessed incorrectly
+Most Deaths To
+Most common Ghost
+Most common Ghost Model
+Total Money Gained
+Total Money Spent
+Total Ghost Events
+Total Ghost Pursuits
+Most Played difficulty 
+
+Objectives:
+1 - Get the average sanity below 25%
+2 - Trigger a ghost pursuit
+3 - Have a member of the team survive a pursuit
+4 - Have 3 Ghost Events happen near a player
+5 - Unlock a locked door
+6 - Get one player to get their sanity below 10%
+7 - Remain inside for 10 minutes
+8 - Have a player be attacked during a pursuit
+9 - Have the ghost interact with a door
+10 - Have the ghost turn on a sink
 
