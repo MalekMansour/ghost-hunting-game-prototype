@@ -45,7 +45,6 @@ public class MarkOff : MonoBehaviour
         if (crossGO)  crossGO.SetActive(state == MarkState.Cross);
     }
 
-    // If you want to read/save later:
     public MarkState GetState() => state;
 
     public void SetState(MarkState newState)
