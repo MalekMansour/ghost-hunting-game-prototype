@@ -76,9 +76,6 @@ public class Journal : MonoBehaviour
     [SerializeField] private AudioClip closeClip;
     [SerializeField] private AudioClip flipClip;
 
-    // =========================
-    // ADDED: NOTES BLOCKING
-    // =========================
     [Header("Notes (input blocking)")]
     [SerializeField] private Notes notes;
 
@@ -93,9 +90,6 @@ public class Journal : MonoBehaviour
 
     private Coroutine routine;
 
-    // =========================
-    // ADDED: helper (ONLY ADDED)
-    // =========================
     private bool IsTypingNotes()
     {
         return notes != null && notes.IsTyping;
