@@ -20,6 +20,7 @@ public class GhostPursuit : MonoBehaviour
         public bool enabled = true;
     }
 
+    // ✅ NEW: Global hunt event so doors can lock/close during hunts
     public static System.Action<bool> OnHuntStateChanged;
 
     [Header("Hunt Rules (by sanity)")]
@@ -44,6 +45,20 @@ public class GhostPursuit : MonoBehaviour
 
     [Tooltip("How often we refresh which child collider we're chasing (seconds).")]
     public float playerTargetRefreshInterval = 1.0f;
+
+    // ✅ NEW (SafeSpace)
+    [Header("SafeSpace (No Hunt Zone)")]
+    [Tooltip("If the player's collider is currently touching this layer, the ghost will NOT hunt that player.")]
+    public LayerMask safeSpaceLayer;
+
+    [Tooltip("If true, we prevent starting hunts on players touching SafeSpace and retarget/end hunts if they enter SafeSpace.")]
+    public bool blockHuntIfPlayerInSafeSpace = true;
+
+    [Tooltip("Extra padding added around player collider bounds when checking SafeSpace touches.")]
+    public float safeSpacePadding = 0.05f;
+
+    [Tooltip("If true, SafeSpace checks will include triggers too (useful if SafeSpace volumes are triggers).")]
+    public bool safeSpaceCheckTriggers = true;
 
     [Header("Chase Speeds")]
     public float chaseSpeed = 3.5f;
@@ -269,6 +284,19 @@ public class GhostPursuit : MonoBehaviour
 
     void TryStartHunt()
     {
+        // ✅ NEW (SafeSpace + Multiplayer targeting)
+        // Pick the best eligible target right before rolling hunt chance.
+        if (TryPickBestEligiblePlayerTarget())
+        {
+            // playerRoot/playerBodyTarget now point to a valid target (not in SafeSpace if enabled)
+        }
+        else
+        {
+            // No eligible targets (everyone dead / no sanity / all in SafeSpace)
+            Log("TryStartHunt: no eligible player targets found.");
+            return;
+        }
+
         ResolvePlayerRootAndBodyTarget(force: true);
 
         Transform sanityRoot = playerRoot != null ? playerRoot : (playerBodyTarget != null ? playerBodyTarget.root : null);
@@ -288,6 +316,13 @@ public class GhostPursuit : MonoBehaviour
         if (!IsPlayerAlive(sanityRoot))
         {
             Log("TryStartHunt: target is dead -> skipping.");
+            return;
+        }
+
+        // ✅ NEW (SafeSpace)
+        if (blockHuntIfPlayerInSafeSpace && IsPlayerTouchingSafeSpace(sanityRoot))
+        {
+            Log("TryStartHunt: target is in SafeSpace -> skipping hunt.");
             return;
         }
 
@@ -491,6 +526,30 @@ public class GhostPursuit : MonoBehaviour
         ResolvePlayerRootAndBodyTarget(force: false);
 
         Transform target = chasePlayerColliderChild && playerBodyTarget != null ? playerBodyTarget : playerRoot;
+
+        // ✅ NEW (SafeSpace, multiplayer retargeting)
+        if (blockHuntIfPlayerInSafeSpace)
+        {
+            // If current target entered SafeSpace, try to switch to another eligible player.
+            if (target != null && IsPlayerTouchingSafeSpace(target))
+            {
+                Log("ChasePlayer: target entered SafeSpace -> retargeting.");
+
+                if (TryPickBestEligiblePlayerTarget())
+                {
+                    // refresh target references
+                    ResolvePlayerRootAndBodyTarget(force: true);
+                    target = chasePlayerColliderChild && playerBodyTarget != null ? playerBodyTarget : playerRoot;
+                }
+                else
+                {
+                    // Everyone is in SafeSpace (or no eligible players) -> end hunt
+                    EndHunt("target in SafeSpace");
+                    return;
+                }
+            }
+        }
+
         if (!IsPlayerAlive(target))
         {
             EndHunt("target died");
@@ -534,6 +593,14 @@ public class GhostPursuit : MonoBehaviour
         if (hits == null || hits.Length == 0) return false;
 
         Transform playerRootFromHit = hits[0].transform.root;
+
+        // ✅ NEW (SafeSpace)
+        // If the touched player is in SafeSpace, do NOT apply hit (ghost shouldn't be able to harm them there)
+        if (blockHuntIfPlayerInSafeSpace && IsPlayerTouchingSafeSpace(playerRootFromHit))
+        {
+            Log("TOUCH -> player is in SafeSpace, ignoring touch.");
+            return false;
+        }
 
         TriggerAttackAnimation();
 
@@ -942,5 +1009,94 @@ public class GhostPursuit : MonoBehaviour
     {
         Gizmos.color = Color.red;
         Gizmos.DrawWireSphere(transform.position, touchRadius);
+    }
+
+    // =========================================================
+    // ✅ NEW (SafeSpace + Multiplayer Target Picking)
+    // =========================================================
+
+    bool TryPickBestEligiblePlayerTarget()
+    {
+        GameObject[] players = GameObject.FindGameObjectsWithTag(playerTag);
+        if (players == null || players.Length == 0) return false;
+
+        Transform bestRoot = null;
+        Transform bestBody = null;
+        float bestDist = float.MaxValue;
+
+        for (int i = 0; i < players.Length; i++)
+        {
+            if (players[i] == null) continue;
+
+            Transform root = players[i].transform;
+
+            // Must have alive sanity (your existing rules)
+            if (!IsPlayerAlive(root)) continue;
+
+            Sanity s = root.GetComponentInChildren<Sanity>(true);
+            if (s == null || !s.enabled) continue;
+
+            // SafeSpace check
+            if (blockHuntIfPlayerInSafeSpace && IsPlayerTouchingSafeSpace(root))
+                continue;
+
+            // Choose nearest eligible player (simple + reliable)
+            float d = Vector3.Distance(transform.position, root.position);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                bestRoot = root;
+                bestBody = chasePlayerColliderChild ? FindFirstColliderOnLayer(root, playerLayer) : null;
+            }
+        }
+
+        if (bestRoot == null) return false;
+
+        playerRoot = bestRoot;
+        if (chasePlayerColliderChild)
+        {
+            playerBodyTarget = bestBody;
+            if (playerBodyTarget == null)
+            {
+                Collider c = playerRoot.GetComponentInChildren<Collider>(true);
+                if (c != null) playerBodyTarget = c.transform;
+            }
+        }
+
+        return true;
+    }
+
+    bool IsPlayerTouchingSafeSpace(Transform playerRootOrChild)
+    {
+        if (!blockHuntIfPlayerInSafeSpace) return false;
+        if (safeSpaceLayer.value == 0) return false; // not set in inspector
+
+        if (playerRootOrChild == null) return false;
+
+        Transform root = playerRootOrChild.root;
+
+        // Prefer the player collider on your playerLayer
+        Transform body = FindFirstColliderOnLayer(root, playerLayer);
+        Collider bodyCol = null;
+
+        if (body != null) bodyCol = body.GetComponent<Collider>();
+        if (bodyCol == null) bodyCol = root.GetComponentInChildren<Collider>(true);
+
+        QueryTriggerInteraction q = safeSpaceCheckTriggers ? QueryTriggerInteraction.Collide : QueryTriggerInteraction.Ignore;
+
+        // If we found a collider, check overlap using its bounds
+        if (bodyCol != null)
+        {
+            Bounds b = bodyCol.bounds;
+            Vector3 halfExtents = b.extents + Vector3.one * Mathf.Max(0f, safeSpacePadding);
+
+            // Use OverlapBox as a "touching SafeSpace" approximation that is stable and fast
+            Collider[] hits = Physics.OverlapBox(b.center, halfExtents, bodyCol.transform.rotation, safeSpaceLayer, q);
+            return hits != null && hits.Length > 0;
+        }
+
+        // Fallback: small sphere at root
+        Collider[] hits2 = Physics.OverlapSphere(root.position, 0.35f, safeSpaceLayer, q);
+        return hits2 != null && hits2.Length > 0;
     }
 }
