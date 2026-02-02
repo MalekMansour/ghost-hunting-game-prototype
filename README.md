@@ -1,5 +1,5 @@
 # Spectrify
-Spectrify is a co-op horror investigation game with up to 6 players, focused on behavior-based ghost identification and intense survival moments.
+Spectrify is a co-op horror investigation game with up to 4 players, focused on behavior-based ghost identification and intense survival moments.
 
 Maps:
 - The Abyss Asylum 
