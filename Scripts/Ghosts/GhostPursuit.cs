@@ -1090,18 +1090,15 @@ public class GhostPursuit : MonoBehaviour
 
         QueryTriggerInteraction q = safeSpaceCheckTriggers ? QueryTriggerInteraction.Collide : QueryTriggerInteraction.Ignore;
 
-        // If we found a collider, check overlap using its bounds
         if (bodyCol != null)
         {
             Bounds b = bodyCol.bounds;
             Vector3 halfExtents = b.extents + Vector3.one * Mathf.Max(0f, safeSpacePadding);
 
-            // Use OverlapBox as a "touching SafeSpace" approximation that is stable and fast
             Collider[] hits = Physics.OverlapBox(b.center, halfExtents, bodyCol.transform.rotation, safeSpaceLayer, q);
             return hits != null && hits.Length > 0;
         }
 
-        // Fallback: small sphere at root
         Collider[] hits2 = Physics.OverlapSphere(root.position, 0.35f, safeSpaceLayer, q);
         return hits2 != null && hits2.Length > 0;
     }
