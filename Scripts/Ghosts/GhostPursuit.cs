@@ -342,6 +342,12 @@ public class GhostPursuit : MonoBehaviour
             return;
         }
 
+        if (Crucifix.TryConsumeProtection(sanityRoot, transform))
+        {
+            Log("TryStartHunt: crucifix burned -> hunt blocked this attempt.");
+            return;
+        }
+
         StartHunt();
     }
 
