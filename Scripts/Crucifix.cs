@@ -54,7 +54,6 @@ public class Crucifix : MonoBehaviour
 
     void Update()
     {
-        // Auto ON when held, OFF when not held (no button needed)
         RefreshHeldState(force: false);
     }
 
