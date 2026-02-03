@@ -33,7 +33,6 @@ public class Crucifix : MonoBehaviour
 
     private bool used = false;
 
-    // --- GLOBAL registry so GhostPursuit can find held crucifixes ---
     private static readonly System.Collections.Generic.List<Crucifix> held = new System.Collections.Generic.List<Crucifix>();
 
     void Awake()
