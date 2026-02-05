@@ -163,9 +163,6 @@ public class PlayerView : MonoBehaviour
             pitchPivot.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
         }
 
-        // -------------------------
-        // YAW (Player ROOT ONLY)
-        // -------------------------
         if (!spectatorMode && playerBody != null)
         {
             yawRotation += currentMouseX * Time.deltaTime;
@@ -175,7 +172,6 @@ public class PlayerView : MonoBehaviour
             {
                 playerBody.rotation = Quaternion.Euler(0f, yawRotation, 0f);
             }
-            // Rigidbody rotation applied in FixedUpdate
         }
     }
 
