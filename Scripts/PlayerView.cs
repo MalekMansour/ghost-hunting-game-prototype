@@ -44,7 +44,6 @@ public class PlayerView : MonoBehaviour
     // yaw accumulator
     private float yawRotation = 0f;
 
-    // if body has Rigidbody, rotate via MoveRotation (best for "spin on place")
     private Rigidbody bodyRb;
 
     void Start()
@@ -70,8 +69,6 @@ public class PlayerView : MonoBehaviour
             }
         }
 
-        // If pitchPivot not set, find EXACT child "CameraPivot" under playerBody.
-        // No "parent of camera" fallback, because that’s how it accidentally binds wrong.
         if (pitchPivot == null && playerBody != null)
         {
             Transform found = playerBody.Find("CameraPivot");
@@ -83,9 +80,6 @@ public class PlayerView : MonoBehaviour
         if (pitchPivot == null && transform.parent != null && transform.parent != transform)
             pitchPivot = transform.parent;
 
-        // ----------------------------
-        // INIT ROTATION STATE
-        // ----------------------------
         if (playerBody != null)
         {
             yawRotation = playerBody.eulerAngles.y;
