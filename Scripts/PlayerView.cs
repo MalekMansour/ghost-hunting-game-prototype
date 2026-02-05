@@ -1,7 +1,7 @@
 using UnityEngine;
 using System;
 using System.Collections;
-using UnityEngine.Rendering; // Volume
+using UnityEngine.Rendering; 
 
 public class PlayerView : MonoBehaviour
 {
@@ -52,15 +52,6 @@ public class PlayerView : MonoBehaviour
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
 
-        // ----------------------------
-        // HARD AUTO-FIND (NO WEIRD FALLBACKS)
-        // ----------------------------
-
-        // If playerBody not set, try to find it by walking UP to the Player root.
-        // Expected hierarchy:
-        // Player (root)
-        //   CameraPivot
-        //     Main Camera (this script is here)
         if (playerBody == null)
         {
             Transform t = transform;
