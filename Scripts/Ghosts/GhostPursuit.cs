@@ -598,8 +598,6 @@ public class GhostPursuit : MonoBehaviour
 
         Transform playerRootFromHit = hits[0].transform.root;
 
-        // ✅ NEW (SafeSpace)
-        // If the touched player is in SafeSpace, do NOT apply hit (ghost shouldn't be able to harm them there)
         if (blockHuntIfPlayerInSafeSpace && IsPlayerTouchingSafeSpace(playerRootFromHit))
         {
             Log("TOUCH -> player is in SafeSpace, ignoring touch.");
