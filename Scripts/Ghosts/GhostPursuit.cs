@@ -20,7 +20,6 @@ public class GhostPursuit : MonoBehaviour
         public bool enabled = true;
     }
 
-    // ✅ NEW: Global hunt event so doors can lock/close during hunts
     public static System.Action<bool> OnHuntStateChanged;
 
     [Header("Hunt Rules (by sanity)")]
@@ -284,8 +283,7 @@ public class GhostPursuit : MonoBehaviour
 
     void TryStartHunt()
     {
-        // ✅ NEW (SafeSpace + Multiplayer targeting)
-        // Pick the best eligible target right before rolling hunt chance.
+
         if (TryPickBestEligiblePlayerTarget())
         {
             // playerRoot/playerBodyTarget now point to a valid target (not in SafeSpace if enabled)
