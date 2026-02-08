@@ -30,9 +30,9 @@ public class DeviceUI : MonoBehaviour
     public GameObject menuCursorGO;
 
     [Header("Player Lock While Device Open (optional manual assign)")]
-    public MonoBehaviour[] playerScriptsToDisable;   // PlayerMovement, etc
-    public MonoBehaviour[] lookScriptsToDisable;     // PlayerView / camera look, etc
-    public MonoBehaviour[] footstepScriptsToDisable; // Footsteps scripts, etc
+    public MonoBehaviour[] playerScriptsToDisable;  
+    public MonoBehaviour[] lookScriptsToDisable;     
+    public MonoBehaviour[] footstepScriptsToDisable; 
     public Rigidbody playerRigidbody;
     public bool freezeTime = false;
 
