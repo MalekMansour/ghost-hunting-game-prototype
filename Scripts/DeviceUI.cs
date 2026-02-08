@@ -6,7 +6,7 @@ using Unity.Netcode;
 public class DeviceUI : MonoBehaviour
 {
     [Header("UI")]
-    public GameObject rootPanel; // assign your actual Device panel (child under canvas). If null -> uses this.gameObject
+    public GameObject rootPanel; 
     public Button submitButton;
     public TMP_Text statusText;
 
@@ -18,7 +18,7 @@ public class DeviceUI : MonoBehaviour
     public GameObject[] circleHighlights;
 
     [Tooltip("If auto-finding circles, we will prefer a child whose name contains this (case-insensitive).")]
-    public string circleChildNameContains = "rectangle"; // set to "circle" or "rectangle" if needed
+    public string circleChildNameContains = "rectangle"; 
 
     [Tooltip("If true, and circleHighlights is empty, we auto-find circle children under each ghost button.")]
     public bool autoFindCircles = true;
