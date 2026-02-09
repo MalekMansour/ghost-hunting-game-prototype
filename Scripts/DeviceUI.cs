@@ -41,6 +41,7 @@ public class DeviceUI : MonoBehaviour
     [Header("SFX")]
     public AudioSource uiAudioSource;
     public AudioClip openDeviceClip;
+    public AudioClip closeDeviceClip;
     public AudioClip ghostClickClip;
     [Range(0f, 1f)] public float uiSfxVolume = 1f;
 
@@ -49,7 +50,7 @@ public class DeviceUI : MonoBehaviour
 
     [Header("Cursor Override")]
     [Tooltip("How many frames after closing we HARD force cursor hidden+locked in LateUpdate.")]
-    public int forceCloseCursorFrames = 180; // ~3 seconds @60fps (strong)
+    public int forceCloseCursorFrames = 180; // ~3 seconds @60fps
     private int closeCursorFramesLeft = 0;
 
     [Header("Debug")]
@@ -69,36 +70,30 @@ public class DeviceUI : MonoBehaviour
                 uiAudioSource = GetComponentInChildren<AudioSource>(true);
         }
 
-        rootPanel.SetActive(false);
-        SetStatus("");
-        SafeSetMenuCursor(false);
-        ForceFPSCursor();
+        // Start hidden (Journal-style)
+        HideInstant();
 
         if (autoFindGhostButtons && (ghostButtons == null || ghostButtons.Length == 0))
             ghostButtons = AutoFindGhostButtonsUnderPanel();
 
-        if (ghostButtons != null)
-        {
-            for (int i = 0; i < ghostButtons.Length; i++)
-            {
-                int idx = i;
-                if (ghostButtons[i] != null)
-                    ghostButtons[i].onClick.AddListener(() => OnGhostPressed(idx));
-            }
-        }
+        WireGhostButtons();
 
         if (submitButton != null)
+        {
+            submitButton.onClick.RemoveAllListeners();
             submitButton.onClick.AddListener(OnSubmitPressed);
+        }
 
         if (autoFindCircles && (circleHighlights == null || circleHighlights.Length == 0))
             circleHighlights = AutoFindCirclesForButtons(ghostButtons);
 
         UpdateCircles(-1);
+        SetStatus("");
     }
 
     private void Update()
     {
-        // If open, let ESC close
+        // Close with ESC when open
         if (isOpen && Input.GetKeyDown(closeKey))
         {
             Close();
@@ -114,27 +109,26 @@ public class DeviceUI : MonoBehaviour
 
         if (!isOpen) return;
 
-        // While open: cursor ON + unlocked (Update)
-        Cursor.visible = true;
-        Cursor.lockState = CursorLockMode.None;
-        SafeSetMenuCursor(true);
-
+        // While open, keep submit state updated
         if (autoDisableSubmitIfNotAllMatch && submitButton != null)
             submitButton.interactable = AreAllPlayersMatchingSelection();
     }
 
     private void LateUpdate()
     {
-        // ✅ THE FIX:
-        // If closed (or just closed), force cursor OFF at the end of the frame,
-        // so any other script that turned it ON earlier loses.
+        // ✅ WIN THE CURSOR FIGHT AFTER CLOSE
+        // Any script that turns cursor on in Update loses to this.
         if (!isOpen && closeCursorFramesLeft > 0)
         {
             closeCursorFramesLeft--;
-            ForceFPSCursor();
+            ForceFPSCursorOff();
             SafeSetMenuCursor(false);
         }
     }
+
+    // ============================
+    // PUBLIC API
+    // ============================
 
     public void Open()
     {
@@ -143,26 +137,32 @@ public class DeviceUI : MonoBehaviour
         if (!gameObject.activeSelf) gameObject.SetActive(true);
         if (rootPanel == null) rootPanel = gameObject;
 
-        rootPanel.SetActive(true);
         isOpen = true;
-
-        // Stop forcing cursor closed
         closeCursorFramesLeft = 0;
+
+        rootPanel.SetActive(true);
 
         PrepareLocalPlayerRefsIfMissing();
         LockLocalPlayer(true);
 
-        SetStatus("Select the ghost.");
+        // Cursor ON (Journal-style locked=true)
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.None;
+        SafeSetMenuCursor(true);
+
+        if (freezeTime)
+        {
+            cachedTimeScale = Time.timeScale;
+            Time.timeScale = 0f;
+        }
+
         PlayUISfx(openDeviceClip);
 
         GhostVoteNetcode vote = GetLocalVote();
         int current = (vote != null) ? vote.SelectedGhostIndex.Value : -1;
         UpdateCircles(current);
 
-        // Force cursor ON immediately
-        Cursor.visible = true;
-        Cursor.lockState = CursorLockMode.None;
-        SafeSetMenuCursor(true);
+        SetStatus("Select the ghost.");
 
         if (debugLogs) Debug.Log("[DeviceUI] Open()", this);
     }
@@ -172,44 +172,97 @@ public class DeviceUI : MonoBehaviour
         ForceClose("Close()");
     }
 
+    // ============================
+    // INTERNAL CLOSE / SAFETY
+    // ============================
+
     private void ForceClose(string reason)
     {
         if (debugLogs) Debug.Log($"[DeviceUI] ForceClose: {reason}", this);
 
         isOpen = false;
 
+        // Panel off
         if (rootPanel != null)
             rootPanel.SetActive(false);
 
-        SetStatus("");
-
+        // Unlock player scripts
         LockLocalPlayer(false);
 
-        // ✅ Start hard forcing cursor OFF after close (LateUpdate)
+        if (freezeTime)
+            Time.timeScale = cachedTimeScale;
+
+        PlayUISfx(closeDeviceClip);
+
+        // Cursor OFF (Journal-style locked=false)
+        ForceFPSCursorOff();
+        SafeSetMenuCursor(false);
+
+        // Keep forcing OFF for a bit to beat other scripts
         closeCursorFramesLeft = Mathf.Max(1, forceCloseCursorFrames);
 
-        // Also do it immediately
-        ForceFPSCursor();
+        SetStatus("");
+    }
+
+    private void HideInstant()
+    {
+        isOpen = false;
+
+        if (rootPanel != null)
+            rootPanel.SetActive(false);
+
         SafeSetMenuCursor(false);
+        ForceFPSCursorOff();
+
+        if (freezeTime)
+            cachedTimeScale = Time.timeScale;
     }
 
     private void OnDisable()
     {
-        if (isOpen) LockLocalPlayer(false);
+        // If disabled externally while open, still restore properly.
+        if (isOpen)
+        {
+            LockLocalPlayer(false);
+
+            if (freezeTime)
+                Time.timeScale = cachedTimeScale;
+        }
+
         isOpen = false;
 
-        closeCursorFramesLeft = Mathf.Max(1, forceCloseCursorFrames);
-        ForceFPSCursor();
+        ForceFPSCursorOff();
         SafeSetMenuCursor(false);
+        closeCursorFramesLeft = Mathf.Max(1, forceCloseCursorFrames);
     }
 
     private void OnDestroy()
     {
-        ForceFPSCursor();
+        ForceFPSCursorOff();
         SafeSetMenuCursor(false);
 
-        if (isOpen) LockLocalPlayer(false);
+        if (isOpen)
+            LockLocalPlayer(false);
+
         isOpen = false;
+    }
+
+    // ============================
+    // BUTTON HANDLERS
+    // ============================
+
+    private void WireGhostButtons()
+    {
+        if (ghostButtons == null) return;
+
+        for (int i = 0; i < ghostButtons.Length; i++)
+        {
+            int idx = i;
+            if (ghostButtons[i] == null) continue;
+
+            ghostButtons[i].onClick.RemoveAllListeners();
+            ghostButtons[i].onClick.AddListener(() => OnGhostPressed(idx));
+        }
     }
 
     private void OnGhostPressed(int index)
@@ -218,6 +271,7 @@ public class DeviceUI : MonoBehaviour
 
         PlayUISfx(ghostClickClip);
 
+        // Circle highlight (local visual)
         UpdateCircles(index);
 
         GhostVoteNetcode vote = GetLocalVote();
@@ -227,6 +281,7 @@ public class DeviceUI : MonoBehaviour
             return;
         }
 
+        // Netcode selection
         vote.SetSelectedGhostServerRpc(index);
 
         string label =
@@ -263,6 +318,10 @@ public class DeviceUI : MonoBehaviour
         SetStatus(message);
     }
 
+    // ============================
+    // SFX
+    // ============================
+
     private void PlayUISfx(AudioClip clip)
     {
         if (clip == null) return;
@@ -278,6 +337,10 @@ public class DeviceUI : MonoBehaviour
             AudioSource.PlayClipAtPoint(clip, Camera.main.transform.position, Mathf.Clamp01(uiSfxVolume));
     }
 
+    // ============================
+    // CIRCLES
+    // ============================
+
     private void UpdateCircles(int selectedIndex)
     {
         if (circleHighlights == null || circleHighlights.Length == 0) return;
@@ -289,9 +352,9 @@ public class DeviceUI : MonoBehaviour
         }
     }
 
-    // --------------------------
-    // Auto-find helpers
-    // --------------------------
+    // ============================
+    // AUTO-FIND HELPERS
+    // ============================
 
     private Button[] AutoFindGhostButtonsUnderPanel()
     {
@@ -340,6 +403,7 @@ public class DeviceUI : MonoBehaviour
         Transform[] all = buttonRoot.GetComponentsInChildren<Transform>(true);
         string needle = string.IsNullOrEmpty(circleChildNameContains) ? "" : circleChildNameContains.ToLower();
 
+        // Prefer inactive child with matching name
         for (int i = 0; i < all.Length; i++)
         {
             Transform t = all[i];
@@ -353,6 +417,7 @@ public class DeviceUI : MonoBehaviour
             }
         }
 
+        // Any matching name
         for (int i = 0; i < all.Length; i++)
         {
             Transform t = all[i];
@@ -362,6 +427,7 @@ public class DeviceUI : MonoBehaviour
                 return t;
         }
 
+        // Fallback: first inactive Image child (not the button's own Image)
         Image buttonImage = buttonRoot.GetComponent<Image>();
         for (int i = 0; i < all.Length; i++)
         {
@@ -378,9 +444,9 @@ public class DeviceUI : MonoBehaviour
         return null;
     }
 
-    // --------------------------
-    // Netcode helpers
-    // --------------------------
+    // ============================
+    // NETCODE HELPERS
+    // ============================
 
     private GhostVoteNetcode GetLocalVote()
     {
@@ -422,9 +488,9 @@ public class DeviceUI : MonoBehaviour
         return firstSet;
     }
 
-    // --------------------------
-    // Player lock
-    // --------------------------
+    // ============================
+    // PLAYER LOCK
+    // ============================
 
     private void PrepareLocalPlayerRefsIfMissing()
     {
@@ -501,22 +567,13 @@ public class DeviceUI : MonoBehaviour
             playerRigidbody.linearVelocity = Vector3.zero;
             playerRigidbody.angularVelocity = Vector3.zero;
         }
-
-        if (freezeTime)
-        {
-            if (locked)
-            {
-                cachedTimeScale = Time.timeScale;
-                Time.timeScale = 0f;
-            }
-            else
-            {
-                Time.timeScale = cachedTimeScale;
-            }
-        }
     }
 
-    private void ForceFPSCursor()
+    // ============================
+    // CURSOR HELPERS (Journal-style)
+    // ============================
+
+    private void ForceFPSCursorOff()
     {
         Cursor.visible = false;
         Cursor.lockState = CursorLockMode.Locked;
@@ -526,6 +583,10 @@ public class DeviceUI : MonoBehaviour
     {
         if (menuCursorGO) menuCursorGO.SetActive(on);
     }
+
+    // ============================
+    // STATUS
+    // ============================
 
     private void SetStatus(string msg)
     {
