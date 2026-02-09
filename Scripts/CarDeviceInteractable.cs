@@ -5,7 +5,7 @@ public class CarDeviceInteractable : MonoBehaviour
     [Header("Debug")]
     public bool debugLogs = true;
 
-    // Called by your interact system (left click)
+    // Your interact system should call this on left click
     public void Interact()
     {
         OpenDevice("Interact()");
@@ -21,7 +21,7 @@ public class CarDeviceInteractable : MonoBehaviour
     {
         if (debugLogs) Debug.Log($"[CarDeviceInteractable] {caller} called on {name}", this);
 
-        // Find all DeviceUI scripts (including inactive)
+        // Find DeviceUI even if the GameObject is inactive
         DeviceUI[] all = Resources.FindObjectsOfTypeAll<DeviceUI>();
         if (all == null || all.Length == 0)
         {
@@ -29,45 +29,22 @@ public class CarDeviceInteractable : MonoBehaviour
             return;
         }
 
-        // Prefer a DeviceUI that is in the scene (not prefab asset) and under a Canvas
-        DeviceUI best = null;
-
+        DeviceUI ui = null;
         for (int i = 0; i < all.Length; i++)
         {
-            var ui = all[i];
-            if (ui == null) continue;
-
-            // must be a scene object
-            if (!ui.gameObject.scene.IsValid()) continue;
-
-            // prefer ones under a Canvas
-            if (ui.GetComponentInParent<Canvas>(true) == null) continue;
-
-            best = ui;
+            if (all[i] == null) continue;
+            ui = all[i];
             break;
         }
 
-        // fallback: first scene-valid
-        if (best == null)
+        if (ui == null)
         {
-            for (int i = 0; i < all.Length; i++)
-            {
-                var ui = all[i];
-                if (ui == null) continue;
-                if (!ui.gameObject.scene.IsValid()) continue;
-                best = ui;
-                break;
-            }
-        }
-
-        if (best == null)
-        {
-            Debug.LogWarning("[CarDeviceInteractable] Found DeviceUI but none were scene-valid.", this);
+            Debug.LogWarning("[CarDeviceInteractable] DeviceUI array existed but was all null.", this);
             return;
         }
 
-        if (debugLogs) Debug.Log($"[CarDeviceInteractable] Opening DeviceUI on: {best.gameObject.name}", best);
+        if (debugLogs) Debug.Log($"[CarDeviceInteractable] Opening DeviceUI on: {ui.gameObject.name}", ui);
 
-        best.Open();
+        ui.Open();
     }
 }
