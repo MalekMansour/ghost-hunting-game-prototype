@@ -6,7 +6,7 @@ using Unity.Netcode;
 public class DeviceUI : MonoBehaviour
 {
     [Header("UI")]
-    public GameObject rootPanel; // your Device panel under the canvas (the thing you toggle on/off)
+    public GameObject rootPanel;
     public Button submitButton;
     public TMP_Text statusText;
 
@@ -16,13 +16,8 @@ public class DeviceUI : MonoBehaviour
     [Header("Circles (optional: can auto-find)")]
     public GameObject[] circleHighlights;
 
-    [Tooltip("We will prefer a child whose name contains this (case-insensitive). Example: rectangle, circle.")]
     public string circleChildNameContains = "rectangle";
-
-    [Tooltip("If true, and circleHighlights is empty, we auto-find circle children under each ghost button.")]
     public bool autoFindCircles = true;
-
-    [Tooltip("If true and ghostButtons is empty, we auto-find all Buttons under rootPanel (excluding submitButton).")]
     public bool autoFindGhostButtons = true;
 
     [Header("Close")]
@@ -32,9 +27,9 @@ public class DeviceUI : MonoBehaviour
     public GameObject menuCursorGO;
 
     [Header("Player Lock While Device Open (optional manual assign)")]
-    public MonoBehaviour[] playerScriptsToDisable;   // PlayerMovement, etc
-    public MonoBehaviour[] lookScriptsToDisable;     // PlayerView / camera look, etc
-    public MonoBehaviour[] footstepScriptsToDisable; // Footsteps scripts, etc
+    public MonoBehaviour[] playerScriptsToDisable;
+    public MonoBehaviour[] lookScriptsToDisable;
+    public MonoBehaviour[] footstepScriptsToDisable;
     public Rigidbody playerRigidbody;
     public bool freezeTime = false;
 
@@ -44,9 +39,9 @@ public class DeviceUI : MonoBehaviour
     public string[] footstepScriptNames = new[] { "Footsteps" };
 
     [Header("SFX")]
-    public AudioSource uiAudioSource;               // optional, will auto-find
-    public AudioClip openDeviceClip;                // plays when opened
-    public AudioClip ghostClickClip;                // plays when clicking a ghost
+    public AudioSource uiAudioSource;
+    public AudioClip openDeviceClip;
+    public AudioClip ghostClickClip;
     [Range(0f, 1f)] public float uiSfxVolume = 1f;
 
     [Header("Behavior")]
@@ -58,14 +53,13 @@ public class DeviceUI : MonoBehaviour
     private bool isOpen;
     private float cachedTimeScale = 1f;
 
-    // Cursor force-close failsafe (prevents other scripts from re-showing cursor right after close)
-    private int forceCursorFrames = 0;
+    // Cursor domination frames after close (beats other scripts)
+    private int forceCloseCursorFrames = 0;
 
     private void Awake()
     {
         if (rootPanel == null) rootPanel = gameObject;
 
-        // Auto find audio source if not assigned
         if (uiAudioSource == null)
         {
             uiAudioSource = GetComponent<AudioSource>();
@@ -73,17 +67,15 @@ public class DeviceUI : MonoBehaviour
                 uiAudioSource = GetComponentInChildren<AudioSource>(true);
         }
 
-        // Start hidden
         rootPanel.SetActive(false);
         SetStatus("");
+
         SafeSetMenuCursor(false);
         ForceFPSCursor();
 
-        // Auto-find ghost buttons if needed
         if (autoFindGhostButtons && (ghostButtons == null || ghostButtons.Length == 0))
             ghostButtons = AutoFindGhostButtonsUnderPanel();
 
-        // Wire buttons (DON'T RemoveAllListeners() — can break existing UI)
         if (ghostButtons != null)
         {
             for (int i = 0; i < ghostButtons.Length; i++)
@@ -97,28 +89,33 @@ public class DeviceUI : MonoBehaviour
         if (submitButton != null)
             submitButton.onClick.AddListener(OnSubmitPressed);
 
-        // Auto-find circles if not provided
         if (autoFindCircles && (circleHighlights == null || circleHighlights.Length == 0))
             circleHighlights = AutoFindCirclesForButtons(ghostButtons);
 
-        // Ensure all circles start OFF
         UpdateCircles(-1);
     }
 
     private void Update()
     {
-        // ✅ If we just closed, force cursor hidden/locked for a few frames (beats other scripts)
-        if (forceCursorFrames > 0)
+        // ✅ If device is OPEN, FORCE cursor visible/unlocked every frame (wins vs other scripts)
+        if (isOpen)
         {
-            forceCursorFrames--;
+            Cursor.visible = true;
+            Cursor.lockState = CursorLockMode.None;
+            SafeSetMenuCursor(true);
+        }
+        // ✅ If we just closed, FORCE cursor hidden/locked for a few frames
+        else if (forceCloseCursorFrames > 0)
+        {
+            forceCloseCursorFrames--;
             ForceFPSCursor();
             SafeSetMenuCursor(false);
         }
 
-        // ✅ FAILSAFE: if something hid the panel while "open", force close (restores cursor)
+        // Fail-safe: if something hid the panel while open, close cleanly
         if (isOpen && (rootPanel == null || !rootPanel.activeInHierarchy))
         {
-            ForceClose("Panel was hidden externally");
+            ForceClose("Panel hidden externally");
             return;
         }
 
@@ -144,15 +141,15 @@ public class DeviceUI : MonoBehaviour
         rootPanel.SetActive(true);
         isOpen = true;
 
+        // cancel close-forcing
+        forceCloseCursorFrames = 0;
+
         PrepareLocalPlayerRefsIfMissing();
         LockLocalPlayer(true);
 
         SetStatus("Select the ghost.");
-
-        // SFX: open device
         PlayUISfx(openDeviceClip);
 
-        // Sync circles to local selection
         GhostVoteNetcode vote = GetLocalVote();
         int current = (vote != null) ? vote.SelectedGhostIndex.Value : -1;
         UpdateCircles(current);
@@ -176,12 +173,10 @@ public class DeviceUI : MonoBehaviour
 
         SetStatus("");
 
-        // Always restore player control and cursor
         LockLocalPlayer(false);
 
-        // ✅ BIG FIX: force cursor hidden/locked for a few frames after closing
-        // This prevents other scripts (menu cursor, UI, etc.) from immediately re-enabling it.
-        forceCursorFrames = 8;
+        // ✅ after close, hard-force cursor off for a bit
+        forceCloseCursorFrames = 12;
 
         ForceFPSCursor();
         SafeSetMenuCursor(false);
@@ -192,14 +187,13 @@ public class DeviceUI : MonoBehaviour
         if (isOpen) LockLocalPlayer(false);
         isOpen = false;
 
-        forceCursorFrames = 8;
+        forceCloseCursorFrames = 12;
         ForceFPSCursor();
         SafeSetMenuCursor(false);
     }
 
     private void OnDestroy()
     {
-        forceCursorFrames = 8;
         ForceFPSCursor();
         SafeSetMenuCursor(false);
 
@@ -211,10 +205,8 @@ public class DeviceUI : MonoBehaviour
     {
         if (!isOpen) return;
 
-        // SFX: click ghost name
         PlayUISfx(ghostClickClip);
 
-        // Circle locally immediately
         UpdateCircles(index);
 
         GhostVoteNetcode vote = GetLocalVote();
@@ -226,9 +218,11 @@ public class DeviceUI : MonoBehaviour
 
         vote.SetSelectedGhostServerRpc(index);
 
-        string label = (ghostButtons != null && index >= 0 && index < ghostButtons.Length && ghostButtons[index] != null)
-            ? ghostButtons[index].name
-            : index.ToString();
+        string label =
+            (ghostButtons != null && index >= 0 && index < ghostButtons.Length && ghostButtons[index] != null)
+                ? ghostButtons[index].name
+                : index.ToString();
+
         SetStatus($"Selected: {label}");
     }
 
@@ -264,12 +258,11 @@ public class DeviceUI : MonoBehaviour
 
         if (uiAudioSource != null)
         {
-            uiAudioSource.spatialBlend = 0f; // 2D UI sound
+            uiAudioSource.spatialBlend = 0f;
             uiAudioSource.PlayOneShot(clip, Mathf.Clamp01(uiSfxVolume));
             return;
         }
 
-        // fallback
         if (Camera.main != null)
             AudioSource.PlayClipAtPoint(clip, Camera.main.transform.position, Mathf.Clamp01(uiSfxVolume));
     }
@@ -326,8 +319,7 @@ public class DeviceUI : MonoBehaviour
             }
             else if (debugLogs)
             {
-                Debug.LogWarning($"[DeviceUI] Could not find circle child under '{buttons[i].name}'. " +
-                                 $"Make sure the circle is a CHILD of the button and starts OFF.", buttons[i]);
+                Debug.LogWarning($"[DeviceUI] Could not find circle child under '{buttons[i].name}'.", buttons[i]);
             }
         }
 
@@ -341,7 +333,6 @@ public class DeviceUI : MonoBehaviour
         Transform[] all = buttonRoot.GetComponentsInChildren<Transform>(true);
         string needle = string.IsNullOrEmpty(circleChildNameContains) ? "" : circleChildNameContains.ToLower();
 
-        // 1) BEST MATCH: inactive child whose name contains needle
         for (int i = 0; i < all.Length; i++)
         {
             Transform t = all[i];
@@ -355,7 +346,6 @@ public class DeviceUI : MonoBehaviour
             }
         }
 
-        // 2) Name contains needle (even if active)
         for (int i = 0; i < all.Length; i++)
         {
             Transform t = all[i];
@@ -365,9 +355,7 @@ public class DeviceUI : MonoBehaviour
                 return t;
         }
 
-        // 3) Fallback: first INACTIVE child Image (avoid the button background image)
         Image buttonImage = buttonRoot.GetComponent<Image>();
-
         for (int i = 0; i < all.Length; i++)
         {
             Transform t = all[i];
@@ -510,16 +498,6 @@ public class DeviceUI : MonoBehaviour
 
         SafeSetMenuCursor(locked);
 
-        if (locked)
-        {
-            Cursor.visible = true;
-            Cursor.lockState = CursorLockMode.None;
-        }
-        else
-        {
-            ForceFPSCursor();
-        }
-
         if (freezeTime)
         {
             if (locked)
@@ -532,6 +510,8 @@ public class DeviceUI : MonoBehaviour
                 Time.timeScale = cachedTimeScale;
             }
         }
+
+        // NOTE: Cursor is handled in Update() domination now.
     }
 
     private void ForceFPSCursor()
