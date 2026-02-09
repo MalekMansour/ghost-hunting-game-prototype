@@ -47,14 +47,16 @@ public class DeviceUI : MonoBehaviour
     [Header("Behavior")]
     public bool autoDisableSubmitIfNotAllMatch = true;
 
+    [Header("Cursor Override")]
+    [Tooltip("How many frames after closing we HARD force cursor hidden+locked in LateUpdate.")]
+    public int forceCloseCursorFrames = 180; // ~3 seconds @60fps (strong)
+    private int closeCursorFramesLeft = 0;
+
     [Header("Debug")]
     public bool debugLogs = true;
 
     private bool isOpen;
     private float cachedTimeScale = 1f;
-
-    // Cursor domination frames after close (beats other scripts)
-    private int forceCloseCursorFrames = 0;
 
     private void Awake()
     {
@@ -69,7 +71,6 @@ public class DeviceUI : MonoBehaviour
 
         rootPanel.SetActive(false);
         SetStatus("");
-
         SafeSetMenuCursor(false);
         ForceFPSCursor();
 
@@ -97,19 +98,11 @@ public class DeviceUI : MonoBehaviour
 
     private void Update()
     {
-        // ✅ If device is OPEN, FORCE cursor visible/unlocked every frame (wins vs other scripts)
-        if (isOpen)
+        // If open, let ESC close
+        if (isOpen && Input.GetKeyDown(closeKey))
         {
-            Cursor.visible = true;
-            Cursor.lockState = CursorLockMode.None;
-            SafeSetMenuCursor(true);
-        }
-        // ✅ If we just closed, FORCE cursor hidden/locked for a few frames
-        else if (forceCloseCursorFrames > 0)
-        {
-            forceCloseCursorFrames--;
-            ForceFPSCursor();
-            SafeSetMenuCursor(false);
+            Close();
+            return;
         }
 
         // Fail-safe: if something hid the panel while open, close cleanly
@@ -121,14 +114,26 @@ public class DeviceUI : MonoBehaviour
 
         if (!isOpen) return;
 
-        if (Input.GetKeyDown(closeKey))
-        {
-            Close();
-            return;
-        }
+        // While open: cursor ON + unlocked (Update)
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.None;
+        SafeSetMenuCursor(true);
 
         if (autoDisableSubmitIfNotAllMatch && submitButton != null)
             submitButton.interactable = AreAllPlayersMatchingSelection();
+    }
+
+    private void LateUpdate()
+    {
+        // ✅ THE FIX:
+        // If closed (or just closed), force cursor OFF at the end of the frame,
+        // so any other script that turned it ON earlier loses.
+        if (!isOpen && closeCursorFramesLeft > 0)
+        {
+            closeCursorFramesLeft--;
+            ForceFPSCursor();
+            SafeSetMenuCursor(false);
+        }
     }
 
     public void Open()
@@ -141,8 +146,8 @@ public class DeviceUI : MonoBehaviour
         rootPanel.SetActive(true);
         isOpen = true;
 
-        // cancel close-forcing
-        forceCloseCursorFrames = 0;
+        // Stop forcing cursor closed
+        closeCursorFramesLeft = 0;
 
         PrepareLocalPlayerRefsIfMissing();
         LockLocalPlayer(true);
@@ -153,6 +158,11 @@ public class DeviceUI : MonoBehaviour
         GhostVoteNetcode vote = GetLocalVote();
         int current = (vote != null) ? vote.SelectedGhostIndex.Value : -1;
         UpdateCircles(current);
+
+        // Force cursor ON immediately
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.None;
+        SafeSetMenuCursor(true);
 
         if (debugLogs) Debug.Log("[DeviceUI] Open()", this);
     }
@@ -175,9 +185,10 @@ public class DeviceUI : MonoBehaviour
 
         LockLocalPlayer(false);
 
-        // ✅ after close, hard-force cursor off for a bit
-        forceCloseCursorFrames = 12;
+        // ✅ Start hard forcing cursor OFF after close (LateUpdate)
+        closeCursorFramesLeft = Mathf.Max(1, forceCloseCursorFrames);
 
+        // Also do it immediately
         ForceFPSCursor();
         SafeSetMenuCursor(false);
     }
@@ -187,7 +198,7 @@ public class DeviceUI : MonoBehaviour
         if (isOpen) LockLocalPlayer(false);
         isOpen = false;
 
-        forceCloseCursorFrames = 12;
+        closeCursorFramesLeft = Mathf.Max(1, forceCloseCursorFrames);
         ForceFPSCursor();
         SafeSetMenuCursor(false);
     }
@@ -317,10 +328,6 @@ public class DeviceUI : MonoBehaviour
                 circles[i] = circle.gameObject;
                 circles[i].SetActive(false);
             }
-            else if (debugLogs)
-            {
-                Debug.LogWarning($"[DeviceUI] Could not find circle child under '{buttons[i].name}'.", buttons[i]);
-            }
         }
 
         return circles;
@@ -363,7 +370,6 @@ public class DeviceUI : MonoBehaviour
 
             Image img = t.GetComponent<Image>();
             if (img == null) continue;
-
             if (buttonImage != null && img == buttonImage) continue;
 
             if (!t.gameObject.activeSelf) return t;
@@ -417,7 +423,7 @@ public class DeviceUI : MonoBehaviour
     }
 
     // --------------------------
-    // Player lock + cursor
+    // Player lock
     // --------------------------
 
     private void PrepareLocalPlayerRefsIfMissing()
@@ -496,8 +502,6 @@ public class DeviceUI : MonoBehaviour
             playerRigidbody.angularVelocity = Vector3.zero;
         }
 
-        SafeSetMenuCursor(locked);
-
         if (freezeTime)
         {
             if (locked)
@@ -510,8 +514,6 @@ public class DeviceUI : MonoBehaviour
                 Time.timeScale = cachedTimeScale;
             }
         }
-
-        // NOTE: Cursor is handled in Update() domination now.
     }
 
     private void ForceFPSCursor()
