@@ -6,22 +6,24 @@ using Unity.Netcode;
 public class DeviceUI : MonoBehaviour
 {
     [Header("UI")]
-    public GameObject rootPanel; 
+    public GameObject rootPanel; // your Device panel under the canvas (the thing you toggle on/off)
     public Button submitButton;
     public TMP_Text statusText;
 
-    [Header("Ghost Buttons (drag your ghost buttons here in order)")]
+    [Header("Ghost Buttons (optional: can auto-find)")]
     public Button[] ghostButtons;
 
-    [Header("Circles (optional)")]
-    [Tooltip("If you leave this empty, we will auto-find a circle child under each ghost button.")]
+    [Header("Circles (optional: can auto-find)")]
     public GameObject[] circleHighlights;
 
-    [Tooltip("If auto-finding circles, we will prefer a child whose name contains this (case-insensitive).")]
-    public string circleChildNameContains = "rectangle"; 
+    [Tooltip("We will prefer a child whose name contains this (case-insensitive). Example: rectangle, circle.")]
+    public string circleChildNameContains = "rectangle";
 
     [Tooltip("If true, and circleHighlights is empty, we auto-find circle children under each ghost button.")]
     public bool autoFindCircles = true;
+
+    [Tooltip("If true and ghostButtons is empty, we auto-find all Buttons under rootPanel (excluding submitButton).")]
+    public bool autoFindGhostButtons = true;
 
     [Header("Close")]
     public KeyCode closeKey = KeyCode.Escape;
@@ -30,9 +32,9 @@ public class DeviceUI : MonoBehaviour
     public GameObject menuCursorGO;
 
     [Header("Player Lock While Device Open (optional manual assign)")]
-    public MonoBehaviour[] playerScriptsToDisable;  
-    public MonoBehaviour[] lookScriptsToDisable;     
-    public MonoBehaviour[] footstepScriptsToDisable; 
+    public MonoBehaviour[] playerScriptsToDisable;   // PlayerMovement, etc
+    public MonoBehaviour[] lookScriptsToDisable;     // PlayerView / camera look, etc
+    public MonoBehaviour[] footstepScriptsToDisable; // Footsteps scripts, etc
     public Rigidbody playerRigidbody;
     public bool freezeTime = false;
 
@@ -54,66 +56,47 @@ public class DeviceUI : MonoBehaviour
     {
         if (rootPanel == null) rootPanel = gameObject;
 
-        // Wire ghost buttons
+        // Start hidden
+        rootPanel.SetActive(false);
+        SetStatus("");
+        SafeSetMenuCursor(false);
+        ForceFPSCursor();
+
+        // Auto-find ghost buttons if needed
+        if (autoFindGhostButtons && (ghostButtons == null || ghostButtons.Length == 0))
+            ghostButtons = AutoFindGhostButtonsUnderPanel();
+
+        // Wire buttons (DON'T RemoveAllListeners() — can break things)
         if (ghostButtons != null)
         {
             for (int i = 0; i < ghostButtons.Length; i++)
             {
                 int idx = i;
                 if (ghostButtons[i] != null)
-                {
-                    ghostButtons[i].onClick.RemoveAllListeners();
                     ghostButtons[i].onClick.AddListener(() => OnGhostPressed(idx));
-                }
             }
         }
 
         if (submitButton != null)
-        {
-            submitButton.onClick.RemoveAllListeners();
             submitButton.onClick.AddListener(OnSubmitPressed);
-        }
 
         // Auto-find circles if not provided
         if (autoFindCircles && (circleHighlights == null || circleHighlights.Length == 0))
-        {
-            if (ghostButtons != null)
-            {
-                circleHighlights = new GameObject[ghostButtons.Length];
+            circleHighlights = AutoFindCirclesForButtons(ghostButtons);
 
-                for (int i = 0; i < ghostButtons.Length; i++)
-                {
-                    if (ghostButtons[i] == null) continue;
-
-                    Transform circle = FindCircleChild(ghostButtons[i].transform);
-                    if (circle != null)
-                    {
-                        circleHighlights[i] = circle.gameObject;
-                        circleHighlights[i].SetActive(false); // start OFF
-                    }
-                    else if (debugLogs)
-                    {
-                        Debug.LogWarning($"[DeviceUI] No circle child found under '{ghostButtons[i].name}'. " +
-                                         $"Make sure the circle is a CHILD of the button.", ghostButtons[i]);
-                    }
-                }
-            }
-        }
-
-        // Start hidden (panel only)
-        rootPanel.SetActive(false);
-        SetStatus("");
+        // Ensure all circles start OFF
         UpdateCircles(-1);
-
-        if (menuCursorGO) menuCursorGO.SetActive(false);
-
-        // Ensure game starts in FPS mode
-        Cursor.visible = false;
-        Cursor.lockState = CursorLockMode.Locked;
     }
 
     private void Update()
     {
+        // ✅ FAILSAFE: if something hid the panel while "open", force close (restores cursor)
+        if (isOpen && (rootPanel == null || !rootPanel.activeInHierarchy))
+        {
+            ForceClose("Panel was hidden externally");
+            return;
+        }
+
         if (!isOpen) return;
 
         if (Input.GetKeyDown(closeKey))
@@ -130,38 +113,36 @@ public class DeviceUI : MonoBehaviour
     {
         if (isOpen) return;
 
-        // Ensure this script stays active so Update keeps running for ESC
-        if (!gameObject.activeSelf)
-            gameObject.SetActive(true);
+        // Make sure this script object is active
+        if (!gameObject.activeSelf) gameObject.SetActive(true);
 
-        // Show panel FIRST (prevents "locked with nothing visible")
         if (rootPanel == null) rootPanel = gameObject;
         rootPanel.SetActive(true);
 
         isOpen = true;
 
-        // Lock AFTER panel is visible
         PrepareLocalPlayerRefsIfMissing();
         LockLocalPlayer(true);
 
         SetStatus("Select the ghost.");
 
+        // Sync circles to local selection
         GhostVoteNetcode vote = GetLocalVote();
         int current = (vote != null) ? vote.SelectedGhostIndex.Value : -1;
         UpdateCircles(current);
-
-        // Optional: if no selection yet, auto-select first ghost on open
-        if (current < 0 && ghostButtons != null && ghostButtons.Length > 0)
-        {
-            OnGhostPressed(0);
-        }
 
         if (debugLogs) Debug.Log("[DeviceUI] Open()", this);
     }
 
     public void Close()
     {
-        // Always restore cursor + controls, even if state is weird
+        ForceClose("Close()");
+    }
+
+    private void ForceClose(string reason)
+    {
+        if (debugLogs) Debug.Log($"[DeviceUI] ForceClose: {reason}", this);
+
         isOpen = false;
 
         if (rootPanel != null)
@@ -169,35 +150,41 @@ public class DeviceUI : MonoBehaviour
 
         SetStatus("");
 
-        // Restore player control first
+        // Always restore player control and cursor
         LockLocalPlayer(false);
 
-        // HARD cursor reset (failsafe)
-        Cursor.visible = false;
-        Cursor.lockState = CursorLockMode.Locked;
-
-        if (menuCursorGO)
-            menuCursorGO.SetActive(false);
-
-        if (debugLogs) Debug.Log("[DeviceUI] Close() -> cursor hidden & locked", this);
+        // Hard cursor reset (even if something else messed with it)
+        ForceFPSCursor();
+        SafeSetMenuCursor(false);
     }
 
-    // Absolute failsafe: if this object is disabled while open or during scene swaps
     private void OnDisable()
     {
-        Cursor.visible = false;
-        Cursor.lockState = CursorLockMode.Locked;
+        // If this UI gets disabled by scene swaps etc, NEVER leave cursor visible
+        if (isOpen) LockLocalPlayer(false);
+        isOpen = false;
 
-        if (menuCursorGO)
-            menuCursorGO.SetActive(false);
+        ForceFPSCursor();
+        SafeSetMenuCursor(false);
+    }
 
-        LockLocalPlayer(false);
+    private void OnDestroy()
+    {
+        ForceFPSCursor();
+        SafeSetMenuCursor(false);
+        if (isOpen) LockLocalPlayer(false);
         isOpen = false;
     }
 
     private void OnGhostPressed(int index)
     {
         if (!isOpen) return;
+
+        if (debugLogs)
+            Debug.Log($"[DeviceUI] Ghost pressed idx={index} name={(ghostButtons != null && index >= 0 && index < ghostButtons.Length && ghostButtons[index] ? ghostButtons[index].name : "null")}", this);
+
+        // Circle locally immediately
+        UpdateCircles(index);
 
         GhostVoteNetcode vote = GetLocalVote();
         if (vote == null)
@@ -206,17 +193,12 @@ public class DeviceUI : MonoBehaviour
             return;
         }
 
-        // Circle locally immediately
-        UpdateCircles(index);
+        vote.SetSelectedGhostServerRpc(index);
 
-        // Status message (optional)
         string label = (ghostButtons != null && index >= 0 && index < ghostButtons.Length && ghostButtons[index] != null)
             ? ghostButtons[index].name
             : index.ToString();
         SetStatus($"Selected: {label}");
-
-        // Tell server: this becomes the "selected ghost" for submit
-        vote.SetSelectedGhostServerRpc(index);
     }
 
     private void OnSubmitPressed()
@@ -247,13 +229,129 @@ public class DeviceUI : MonoBehaviour
 
     private void UpdateCircles(int selectedIndex)
     {
-        if (circleHighlights == null) return;
+        if (circleHighlights == null || circleHighlights.Length == 0) return;
 
         for (int i = 0; i < circleHighlights.Length; i++)
         {
             if (circleHighlights[i] == null) continue;
             circleHighlights[i].SetActive(i == selectedIndex);
         }
+    }
+
+    // --------------------------
+    // Auto-find helpers
+    // --------------------------
+
+    private Button[] AutoFindGhostButtonsUnderPanel()
+    {
+        if (rootPanel == null) return new Button[0];
+
+        Button[] all = rootPanel.GetComponentsInChildren<Button>(true);
+        if (all == null) return new Button[0];
+
+        // Exclude submit button from the ghost list
+        System.Collections.Generic.List<Button> list = new System.Collections.Generic.List<Button>();
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (all[i] == null) continue;
+            if (submitButton != null && all[i] == submitButton) continue;
+            list.Add(all[i]);
+        }
+
+        if (debugLogs) Debug.Log($"[DeviceUI] AutoFound ghost buttons: {list.Count}", this);
+        return list.ToArray();
+    }
+
+    private GameObject[] AutoFindCirclesForButtons(Button[] buttons)
+    {
+        if (buttons == null) return new GameObject[0];
+
+        GameObject[] circles = new GameObject[buttons.Length];
+
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            if (buttons[i] == null) continue;
+
+            Transform circle = FindCircleChild(buttons[i].transform);
+            if (circle != null)
+            {
+                circles[i] = circle.gameObject;
+                circles[i].SetActive(false);
+            }
+            else if (debugLogs)
+            {
+                Debug.LogWarning($"[DeviceUI] Could not find circle child under '{buttons[i].name}'. " +
+                                 $"Make sure the circle is a CHILD of the button and starts OFF.", buttons[i]);
+            }
+        }
+
+        return circles;
+    }
+
+    private Transform FindCircleChild(Transform buttonRoot)
+    {
+        if (buttonRoot == null) return null;
+
+        Transform[] all = buttonRoot.GetComponentsInChildren<Transform>(true);
+        string needle = string.IsNullOrEmpty(circleChildNameContains) ? "" : circleChildNameContains.ToLower();
+
+        // 1) BEST MATCH: inactive child whose name contains needle (rectangle/circle)
+        for (int i = 0; i < all.Length; i++)
+        {
+            Transform t = all[i];
+            if (t == null || t == buttonRoot) continue;
+
+            if (!string.IsNullOrEmpty(needle) &&
+                t.name.ToLower().Contains(needle) &&
+                !t.gameObject.activeSelf)
+            {
+                return t;
+            }
+        }
+
+        // 2) Name contains needle (even if active)
+        for (int i = 0; i < all.Length; i++)
+        {
+            Transform t = all[i];
+            if (t == null || t == buttonRoot) continue;
+
+            if (!string.IsNullOrEmpty(needle) && t.name.ToLower().Contains(needle))
+                return t;
+        }
+
+        // 3) Fallback: first INACTIVE child that has an Image (avoid the button’s own Image)
+        Image buttonImage = buttonRoot.GetComponent<Image>();
+
+        for (int i = 0; i < all.Length; i++)
+        {
+            Transform t = all[i];
+            if (t == null || t == buttonRoot) continue;
+
+            Image img = t.GetComponent<Image>();
+            if (img == null) continue;
+
+            // don't grab the button background image
+            if (buttonImage != null && img == buttonImage) continue;
+
+            if (!t.gameObject.activeSelf) return t;
+        }
+
+        return null;
+    }
+
+    // --------------------------
+    // Netcode helpers
+    // --------------------------
+
+    private GhostVoteNetcode GetLocalVote()
+    {
+        if (NetworkManager.Singleton == null || NetworkManager.Singleton.SpawnManager == null)
+            return null;
+
+        NetworkObject localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
+        if (localPlayer == null) return null;
+
+        return localPlayer.GetComponent<GhostVoteNetcode>();
     }
 
     private bool AreAllPlayersMatchingSelection()
@@ -285,16 +383,9 @@ public class DeviceUI : MonoBehaviour
         return firstSet;
     }
 
-    private GhostVoteNetcode GetLocalVote()
-    {
-        if (NetworkManager.Singleton == null || NetworkManager.Singleton.SpawnManager == null)
-            return null;
-
-        NetworkObject localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
-        if (localPlayer == null) return null;
-
-        return localPlayer.GetComponent<GhostVoteNetcode>();
-    }
+    // --------------------------
+    // Player lock + cursor
+    // --------------------------
 
     private void PrepareLocalPlayerRefsIfMissing()
     {
@@ -324,14 +415,7 @@ public class DeviceUI : MonoBehaviour
 
         if (playerRigidbody == null)
             playerRigidbody = root.GetComponentInChildren<Rigidbody>(true);
-
-        if (debugLogs)
-        {
-            Debug.Log($"[DeviceUI] Auto-found local refs: move={Len(playerScriptsToDisable)} look={Len(lookScriptsToDisable)} steps={Len(footstepScriptsToDisable)} rb={(playerRigidbody ? playerRigidbody.name : "none")}", localPlayer);
-        }
     }
-
-    private int Len(Object[] arr) => arr == null ? 0 : arr.Length;
 
     private MonoBehaviour[] FindScriptsByNames(Transform root, string[] names)
     {
@@ -379,7 +463,7 @@ public class DeviceUI : MonoBehaviour
             playerRigidbody.angularVelocity = Vector3.zero;
         }
 
-        if (menuCursorGO) menuCursorGO.SetActive(locked);
+        SafeSetMenuCursor(locked);
 
         if (locked)
         {
@@ -388,8 +472,7 @@ public class DeviceUI : MonoBehaviour
         }
         else
         {
-            Cursor.visible = false;
-            Cursor.lockState = CursorLockMode.Locked;
+            ForceFPSCursor();
         }
 
         if (freezeTime)
@@ -406,43 +489,19 @@ public class DeviceUI : MonoBehaviour
         }
     }
 
+    private void ForceFPSCursor()
+    {
+        Cursor.visible = false;
+        Cursor.lockState = CursorLockMode.Locked;
+    }
+
+    private void SafeSetMenuCursor(bool on)
+    {
+        if (menuCursorGO) menuCursorGO.SetActive(on);
+    }
+
     private void SetStatus(string msg)
     {
         if (statusText != null) statusText.text = msg;
-    }
-
-    // -------------------------
-    // Circle auto-find helper
-    // -------------------------
-    private Transform FindCircleChild(Transform buttonRoot)
-    {
-        if (buttonRoot == null) return null;
-
-        // Search ALL children (including inactive)
-        Transform[] all = buttonRoot.GetComponentsInChildren<Transform>(true);
-
-        // Prefer name match
-        if (!string.IsNullOrEmpty(circleChildNameContains))
-        {
-            string needle = circleChildNameContains.ToLower();
-            for (int i = 0; i < all.Length; i++)
-            {
-                if (all[i] == null) continue;
-                if (all[i].name.ToLower().Contains(needle))
-                    return all[i];
-            }
-        }
-
-        // Fallback: first child with an Image (often your circle)
-        for (int i = 0; i < all.Length; i++)
-        {
-            if (all[i] == null) continue;
-            if (all[i] == buttonRoot) continue;
-
-            if (all[i].GetComponent<Image>() != null)
-                return all[i];
-        }
-
-        return null;
     }
 }
