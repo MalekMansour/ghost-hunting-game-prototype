@@ -43,6 +43,12 @@ public class DeviceUI : MonoBehaviour
     public string[] lookScriptNames = new[] { "PlayerView" };
     public string[] footstepScriptNames = new[] { "Footsteps" };
 
+    [Header("SFX")]
+    public AudioSource uiAudioSource;               // optional, will auto-find
+    public AudioClip openDeviceClip;                // plays when opened
+    public AudioClip ghostClickClip;                // plays when clicking a ghost
+    [Range(0f, 1f)] public float uiSfxVolume = 1f;
+
     [Header("Behavior")]
     public bool autoDisableSubmitIfNotAllMatch = true;
 
@@ -52,9 +58,20 @@ public class DeviceUI : MonoBehaviour
     private bool isOpen;
     private float cachedTimeScale = 1f;
 
+    // Cursor force-close failsafe (prevents other scripts from re-showing cursor right after close)
+    private int forceCursorFrames = 0;
+
     private void Awake()
     {
         if (rootPanel == null) rootPanel = gameObject;
+
+        // Auto find audio source if not assigned
+        if (uiAudioSource == null)
+        {
+            uiAudioSource = GetComponent<AudioSource>();
+            if (uiAudioSource == null)
+                uiAudioSource = GetComponentInChildren<AudioSource>(true);
+        }
 
         // Start hidden
         rootPanel.SetActive(false);
@@ -66,7 +83,7 @@ public class DeviceUI : MonoBehaviour
         if (autoFindGhostButtons && (ghostButtons == null || ghostButtons.Length == 0))
             ghostButtons = AutoFindGhostButtonsUnderPanel();
 
-        // Wire buttons (DON'T RemoveAllListeners() — can break things)
+        // Wire buttons (DON'T RemoveAllListeners() — can break existing UI)
         if (ghostButtons != null)
         {
             for (int i = 0; i < ghostButtons.Length; i++)
@@ -90,6 +107,14 @@ public class DeviceUI : MonoBehaviour
 
     private void Update()
     {
+        // ✅ If we just closed, force cursor hidden/locked for a few frames (beats other scripts)
+        if (forceCursorFrames > 0)
+        {
+            forceCursorFrames--;
+            ForceFPSCursor();
+            SafeSetMenuCursor(false);
+        }
+
         // ✅ FAILSAFE: if something hid the panel while "open", force close (restores cursor)
         if (isOpen && (rootPanel == null || !rootPanel.activeInHierarchy))
         {
@@ -113,18 +138,19 @@ public class DeviceUI : MonoBehaviour
     {
         if (isOpen) return;
 
-        // Make sure this script object is active
         if (!gameObject.activeSelf) gameObject.SetActive(true);
-
         if (rootPanel == null) rootPanel = gameObject;
-        rootPanel.SetActive(true);
 
+        rootPanel.SetActive(true);
         isOpen = true;
 
         PrepareLocalPlayerRefsIfMissing();
         LockLocalPlayer(true);
 
         SetStatus("Select the ghost.");
+
+        // SFX: open device
+        PlayUISfx(openDeviceClip);
 
         // Sync circles to local selection
         GhostVoteNetcode vote = GetLocalVote();
@@ -153,25 +179,30 @@ public class DeviceUI : MonoBehaviour
         // Always restore player control and cursor
         LockLocalPlayer(false);
 
-        // Hard cursor reset (even if something else messed with it)
+        // ✅ BIG FIX: force cursor hidden/locked for a few frames after closing
+        // This prevents other scripts (menu cursor, UI, etc.) from immediately re-enabling it.
+        forceCursorFrames = 8;
+
         ForceFPSCursor();
         SafeSetMenuCursor(false);
     }
 
     private void OnDisable()
     {
-        // If this UI gets disabled by scene swaps etc, NEVER leave cursor visible
         if (isOpen) LockLocalPlayer(false);
         isOpen = false;
 
+        forceCursorFrames = 8;
         ForceFPSCursor();
         SafeSetMenuCursor(false);
     }
 
     private void OnDestroy()
     {
+        forceCursorFrames = 8;
         ForceFPSCursor();
         SafeSetMenuCursor(false);
+
         if (isOpen) LockLocalPlayer(false);
         isOpen = false;
     }
@@ -180,8 +211,8 @@ public class DeviceUI : MonoBehaviour
     {
         if (!isOpen) return;
 
-        if (debugLogs)
-            Debug.Log($"[DeviceUI] Ghost pressed idx={index} name={(ghostButtons != null && index >= 0 && index < ghostButtons.Length && ghostButtons[index] ? ghostButtons[index].name : "null")}", this);
+        // SFX: click ghost name
+        PlayUISfx(ghostClickClip);
 
         // Circle locally immediately
         UpdateCircles(index);
@@ -227,6 +258,22 @@ public class DeviceUI : MonoBehaviour
         SetStatus(message);
     }
 
+    private void PlayUISfx(AudioClip clip)
+    {
+        if (clip == null) return;
+
+        if (uiAudioSource != null)
+        {
+            uiAudioSource.spatialBlend = 0f; // 2D UI sound
+            uiAudioSource.PlayOneShot(clip, Mathf.Clamp01(uiSfxVolume));
+            return;
+        }
+
+        // fallback
+        if (Camera.main != null)
+            AudioSource.PlayClipAtPoint(clip, Camera.main.transform.position, Mathf.Clamp01(uiSfxVolume));
+    }
+
     private void UpdateCircles(int selectedIndex)
     {
         if (circleHighlights == null || circleHighlights.Length == 0) return;
@@ -249,7 +296,6 @@ public class DeviceUI : MonoBehaviour
         Button[] all = rootPanel.GetComponentsInChildren<Button>(true);
         if (all == null) return new Button[0];
 
-        // Exclude submit button from the ghost list
         System.Collections.Generic.List<Button> list = new System.Collections.Generic.List<Button>();
         for (int i = 0; i < all.Length; i++)
         {
@@ -295,7 +341,7 @@ public class DeviceUI : MonoBehaviour
         Transform[] all = buttonRoot.GetComponentsInChildren<Transform>(true);
         string needle = string.IsNullOrEmpty(circleChildNameContains) ? "" : circleChildNameContains.ToLower();
 
-        // 1) BEST MATCH: inactive child whose name contains needle (rectangle/circle)
+        // 1) BEST MATCH: inactive child whose name contains needle
         for (int i = 0; i < all.Length; i++)
         {
             Transform t = all[i];
@@ -319,7 +365,7 @@ public class DeviceUI : MonoBehaviour
                 return t;
         }
 
-        // 3) Fallback: first INACTIVE child that has an Image (avoid the button’s own Image)
+        // 3) Fallback: first INACTIVE child Image (avoid the button background image)
         Image buttonImage = buttonRoot.GetComponent<Image>();
 
         for (int i = 0; i < all.Length; i++)
@@ -330,7 +376,6 @@ public class DeviceUI : MonoBehaviour
             Image img = t.GetComponent<Image>();
             if (img == null) continue;
 
-            // don't grab the button background image
             if (buttonImage != null && img == buttonImage) continue;
 
             if (!t.gameObject.activeSelf) return t;
