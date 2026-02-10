@@ -19,7 +19,6 @@ public class CarDeviceInteractable : MonoBehaviour
     {
         if (debugLogs) Debug.Log($"[CarDeviceInteractable] {caller} called on {name}", this);
 
-        // Find DeviceUI even if the GameObject is inactive
         DeviceUI[] all = Resources.FindObjectsOfTypeAll<DeviceUI>();
         if (all == null || all.Length == 0)
         {
