@@ -5,13 +5,11 @@ public class CarDeviceInteractable : MonoBehaviour
     [Header("Debug")]
     public bool debugLogs = true;
 
-    // Your interact system should call this on left click
     public void Interact()
     {
         OpenDevice("Interact()");
     }
 
-    // Debug-only: clicking the car directly if it has a Collider
     private void OnMouseDown()
     {
         OpenDevice("OnMouseDown()");
