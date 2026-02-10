@@ -116,8 +116,6 @@ public class DeviceUI : MonoBehaviour
 
     private void LateUpdate()
     {
-        // ✅ WIN THE CURSOR FIGHT AFTER CLOSE
-        // Any script that turns cursor on in Update loses to this.
         if (!isOpen && closeCursorFramesLeft > 0)
         {
             closeCursorFramesLeft--;
@@ -125,10 +123,6 @@ public class DeviceUI : MonoBehaviour
             SafeSetMenuCursor(false);
         }
     }
-
-    // ============================
-    // PUBLIC API
-    // ============================
 
     public void Open()
     {
@@ -145,7 +139,6 @@ public class DeviceUI : MonoBehaviour
         PrepareLocalPlayerRefsIfMissing();
         LockLocalPlayer(true);
 
-        // Cursor ON (Journal-style locked=true)
         Cursor.visible = true;
         Cursor.lockState = CursorLockMode.None;
         SafeSetMenuCursor(true);
@@ -171,10 +164,6 @@ public class DeviceUI : MonoBehaviour
     {
         ForceClose("Close()");
     }
-
-    // ============================
-    // INTERNAL CLOSE / SAFETY
-    // ============================
 
     private void ForceClose(string reason)
     {
@@ -246,10 +235,6 @@ public class DeviceUI : MonoBehaviour
 
         isOpen = false;
     }
-
-    // ============================
-    // BUTTON HANDLERS
-    // ============================
 
     private void WireGhostButtons()
     {
