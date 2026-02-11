@@ -42,12 +42,12 @@ public class Notes : MonoBehaviour
 
     private void Update()
     {
-        // If typing and player clicks anywhere outside the input field -> unfocus
+
         if (!IsTyping) return;
 
         if (Input.GetMouseButtonDown(0))
         {
-            // If click is NOT on the notes input (or its children), unfocus
+
             if (!IsPointerOver(notesInput.gameObject))
                 Unfocus();
         }
