@@ -103,10 +103,8 @@ public class DoorLock : MonoBehaviour
         return key.keyId == requiredKeyId;
     }
 
-    // Called by Interaction.cs on LEFT CLICK when aiming at locked door with key
     public bool TryUnlockWithKey(PlayerInventory inventory)
     {
-        // 🔒 Hunt-locked doors can NEVER be unlocked by key
         if (huntLockedActive)
         {
             if (audioSource != null && lockedSound != null)
@@ -144,9 +142,6 @@ public class DoorLock : MonoBehaviour
         isLocked = false;
     }
 
-    // ------------------------
-    // HUNT HANDLING
-    // ------------------------
     void HandleHuntStateChanged(bool hunting)
     {
         if (!lockDuringHunt)
