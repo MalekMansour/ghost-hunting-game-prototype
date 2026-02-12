@@ -40,8 +40,6 @@ public class Dropped : MonoBehaviour
         rb = GetComponent<Rigidbody>();
         localAudio = GetComponent<AudioSource>();
 
-        // Cheap defaults that help with piles of props (won't break gameplay)
-        // If you already set these in prefab, you can remove these lines.
         rb.interpolation = RigidbodyInterpolation.None;
         rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
     }
@@ -54,7 +52,6 @@ public class Dropped : MonoBehaviour
         if (rb == null)
             return;
 
-        // If it was frozen before, unfreeze
         rb.isKinematic = false;
         rb.useGravity = true;
         rb.WakeUp();
