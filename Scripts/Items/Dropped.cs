@@ -39,7 +39,6 @@ public class Dropped : MonoBehaviour
     {
         rb = GetComponent<Rigidbody>();
         localAudio = GetComponent<AudioSource>();
-
         rb.interpolation = RigidbodyInterpolation.None;
         rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
     }
@@ -76,7 +75,6 @@ public class Dropped : MonoBehaviour
 
         if (rb != null && rb.isKinematic)
         {
-            // Keep it usable again if you pick it up later
             rb.isKinematic = false;
             rb.useGravity = true;
             rb.WakeUp();
