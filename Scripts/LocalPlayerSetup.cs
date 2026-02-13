@@ -98,7 +98,6 @@ public class LocalPlayerSetup : NetworkBehaviour
                 if (b != null) b.enabled = isOwner;
         }
 
-        // Helpful warning if movement doesn't sync
         if (IsClient || IsServer)
         {
             if (expectedNetworkTransform == null)
