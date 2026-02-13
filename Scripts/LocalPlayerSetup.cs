@@ -53,7 +53,6 @@ public class LocalPlayerSetup : NetworkBehaviour
             if (t != null) cylinderTransform = t;
         }
 
-        // Auto-grab NetworkTransform if user didn't drag it in
         if (expectedNetworkTransform == null)
         {
             var comps = rootTransform.GetComponents<Component>();
