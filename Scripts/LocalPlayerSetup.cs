@@ -12,9 +12,6 @@ public class LocalPlayerSetup : NetworkBehaviour
     [Header("Objects to ALWAYS stay on for everyone (model root, cylinder, etc)")]
     [SerializeField] private GameObject[] alwaysOnObjects;
 
-    // =============================
-    // Optional: Cylinder parenting
-    // =============================
     [Header("Optional: Cylinder (legacy support)")]
     [Tooltip("Assign your child cylinder here (or leave empty to auto-find by name).")]
     [SerializeField] private Transform cylinderTransform;
@@ -49,7 +46,6 @@ public class LocalPlayerSetup : NetworkBehaviour
     {
         rootTransform = transform;
 
-        // Auto-find cylinder if not assigned
         if (cylinderTransform == null)
         {
             Transform t = rootTransform.Find("cylinder");
