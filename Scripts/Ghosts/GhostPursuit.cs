@@ -1010,10 +1010,6 @@ public class GhostPursuit : MonoBehaviour
         Gizmos.DrawWireSphere(transform.position, touchRadius);
     }
 
-    // =========================================================
-    // ✅ NEW (SafeSpace + Multiplayer Target Picking)
-    // =========================================================
-
     bool TryPickBestEligiblePlayerTarget()
     {
         GameObject[] players = GameObject.FindGameObjectsWithTag(playerTag);
