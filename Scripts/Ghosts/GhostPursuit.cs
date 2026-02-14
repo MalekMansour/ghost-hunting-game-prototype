@@ -45,7 +45,6 @@ public class GhostPursuit : MonoBehaviour
     [Tooltip("How often we refresh which child collider we're chasing (seconds).")]
     public float playerTargetRefreshInterval = 1.0f;
 
-    // ✅ NEW (SafeSpace)
     [Header("SafeSpace (No Hunt Zone)")]
     [Tooltip("If the player's collider is currently touching this layer, the ghost will NOT hunt that player.")]
     public LayerMask safeSpaceLayer;
@@ -286,7 +285,7 @@ public class GhostPursuit : MonoBehaviour
 
         if (TryPickBestEligiblePlayerTarget())
         {
-            // playerRoot/playerBodyTarget now point to a valid target (not in SafeSpace if enabled)
+
         }
         else
         {
@@ -317,7 +316,6 @@ public class GhostPursuit : MonoBehaviour
             return;
         }
 
-        // ✅ NEW (SafeSpace)
         if (blockHuntIfPlayerInSafeSpace && IsPlayerTouchingSafeSpace(sanityRoot))
         {
             Log("TryStartHunt: target is in SafeSpace -> skipping hunt.");
@@ -392,7 +390,6 @@ public class GhostPursuit : MonoBehaviour
         isHunting = true;
         endingFromTouch = false;
 
-        // ✅ NEW: tell doors hunt started
         OnHuntStateChanged?.Invoke(true);
 
         ResolvePlayerRootAndBodyTarget(force: true);
