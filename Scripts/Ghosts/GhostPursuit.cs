@@ -446,7 +446,6 @@ public class GhostPursuit : MonoBehaviour
 
         Log($"HUNT END ({reason})");
 
-        // ✅ NEW: tell doors hunt ended
         OnHuntStateChanged?.Invoke(false);
 
         if (agent != null && agent.enabled)
@@ -528,7 +527,6 @@ public class GhostPursuit : MonoBehaviour
 
         Transform target = chasePlayerColliderChild && playerBodyTarget != null ? playerBodyTarget : playerRoot;
 
-        // ✅ NEW (SafeSpace, multiplayer retargeting)
         if (blockHuntIfPlayerInSafeSpace)
         {
             // If current target entered SafeSpace, try to switch to another eligible player.
